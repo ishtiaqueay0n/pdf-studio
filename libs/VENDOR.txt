@@ -1,0 +1,28 @@
+Vendored OCR components
+=======================
+
+Downloaded once and committed. Nothing here is fetched at runtime; the
+extension has no network access to these origins after install.
+
+  tesseract.min.js         tesseract.js 6.0.1        dist/tesseract.min.js
+  tesseract-worker.min.js  tesseract.js 6.0.1        dist/worker.min.js
+  tesseract-core.wasm.js   tesseract.js-core 6.1.2   tesseract-core-simd-lstm.wasm.js
+  tessdata/eng.traineddata.gz   tessdata_fast 4.0.0  naptha/tessdata gh-pages
+  tessdata/ben.traineddata.gz   tessdata_fast 4.0.0  naptha/tessdata gh-pages
+
+Sources
+  https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/
+  https://cdn.jsdelivr.net/npm/tesseract.js-core@6.1.2/
+  https://raw.githubusercontent.com/naptha/tessdata/gh-pages/4.0.0_fast/
+
+SHA-256
+  10fff78484067759c43028a02a72d76d0b90eb17302bb23b58a9ec5410bc928b *libs/tesseract.min.js
+  38645599043239c0eb6db08a6504a92dcdc292200535f3e9339cd77c4443b842 *libs/tesseract-worker.min.js
+  9d7c43fb206dc9f48475228b46bf35f888fa9e6259da2e67d5a75c77049f2dc7 *libs/tesseract-core.wasm.js
+  18c1ac52b75e35d44735fb6c2a60acfaf23033524653200738e98f0243edb75b *libs/tessdata/eng.traineddata.gz
+  196f76fed361e34086ef4069681a74c3b6803eb1d3077336b1a73553ccd3870f *libs/tessdata/ben.traineddata.gz
+
+The core is the SIMD + LSTM-only build: the fast language models are
+LSTM-only, and Chrome has supported WebAssembly SIMD since version 91.
+It is the self-contained .wasm.js build so nothing has to resolve a
+sibling .wasm file from inside a worker.

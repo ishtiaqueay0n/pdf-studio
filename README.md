@@ -1,12 +1,16 @@
 # PDF Studio — Chrome Extension
 
-Edit, sign, resize/compress, and stamp images onto PDFs. Everything runs locally
-inside your browser (pdf.js for rendering, pdf-lib for writing). No file ever
-leaves your machine.
+A complete PDF workshop that runs entirely inside your browser. Read, edit,
+annotate, sign, organise, protect and convert PDFs — and build new ones from
+images, Word files, spreadsheets and plain text.
+
+**Nothing is uploaded.** There is no server, no account and no network call:
+pdf.js renders, pdf-lib writes, and the Office formats are produced by bundled
+libraries. Every byte stays on your machine.
 
 ## Install (Load unpacked)
 
-1. Unzip this folder anywhere permanent (Chrome loads it from disk).
+1. Unzip this folder somewhere permanent (Chrome loads it from disk).
 2. Open `chrome://extensions`
 3. Turn on **Developer mode** (top-right toggle).
 4. Click **Load unpacked** and select the `pdf-studio` folder.
@@ -14,57 +18,325 @@ leaves your machine.
    **Allow access to file URLs** — this lets "Edit this PDF" work on PDFs you
    open from your own disk (`file://` tabs).
 
-## Using it
+## Getting a document in
 
-**Edit a PDF that's open in a tab** — while viewing any PDF, click the
-PDF Studio toolbar icon → **Edit this PDF**. You can also right-click a PDF
-link or a PDF page and choose *Edit in PDF Studio*. Or open the editor
-directly and drop/choose a file.
+- While viewing any PDF in a tab, click the toolbar icon → **Edit this PDF**
+  or **Convert this PDF…**
+- Right-click a PDF link or page → *Edit* / *Convert in PDF Studio*.
+- Open the editor and drop a file on it, or press **Ctrl + O**.
+- Password-protected files are supported: you are prompted when one is opened.
 
-**Editing tools** (toolbar, with shortcuts):
-- **Select (V)** — click to select, drag to move, corner dot to resize,
-  Delete key to remove, Ctrl+Z to undo the last added item.
-- **Text (T)** — click a page, type. Double-click a text box to re-edit.
-  Size and color controls appear in the toolbar.
-- **Draw (D)** — freehand pen with size/color.
-- **Whiteout (W)** — drag a white rectangle over anything you want covered.
+---
 
-**Signature (S)** — two modes:
-- *Draw*: sign with mouse/touch/stylus; smoothed strokes, black or blue ink.
-- *Upload & clean up*: choose a photo/scan of your signature on paper. The
-  paper background is stripped out, contrast is normalized, and the ink is
-  re-colored so it sits on the document like a real scanned signature.
-  Adjust the *Background removal* slider until the preview looks clean.
-Then click on the page to place it; drag/resize as needed. The last
-signature is remembered for reuse within the session.
+## Editing and markup
 
-**Insert a picture (I)** — choose any PNG/JPEG/WebP/GIF/BMP, click to place,
-drag and resize. PNG transparency is preserved.
+Every tool works as an overlay: your changes stay editable until you press
+**Save PDF**, and the original file is never touched.
 
-**Resize / Compress** button:
-- *Page dimensions* — scale pages by % or fit to A3/A4/A5/Letter/Legal.
-  This is lossless: vector text stays vector.
-- *File size* — either a lossless re-save, or true compression that
-  re-renders pages at a chosen DPI/JPEG quality (High/Balanced/Small/Tiny
-  presets, or custom). Shows before/after size; download the result or load
-  it back into the editor to keep working.
+| Tool | Key | What it does |
+| --- | --- | --- |
+| Select | `V` | Move, resize (corner dot), duplicate (`Ctrl+D`), delete (`Del`) |
+| Text | `T` | Click to place a text box; bold, italic, size and colour. Double-click to re-edit |
+| Draw | `D` | Smoothed freehand pen with size and colour |
+| Highlight | `H` | Translucent marker in five colours, drawn with a multiply blend |
+| Shape | `R` | Rectangle, ellipse, line and arrow, with stroke width and optional fill |
+| Whiteout | `W` | Cover an area with white |
+| Redact | `X` | Permanently remove content — see below |
+| Note | `N` | Sticky note; exported as a real PDF comment annotation |
+| Sign | `S` | Draw, type or upload a signature |
+| Stamp | `M` | APPROVED / DRAFT / CONFIDENTIAL and friends, or your own text, with an optional date |
+| Image | `I` | Place a PNG/JPEG/WebP/GIF/BMP; transparency is preserved |
+| Pictures | `P` | Edit a picture the document already contains — see below |
+| Edit text | `E` | Edit a paragraph the document already contains — see below |
 
-**Download PDF** — exports the document with all your edits baked in.
+**Signatures** come three ways: *draw* with mouse, touch or stylus; *type* your
+name in one of four handwriting styles; or *upload* a photo of your signature on
+paper — the paper background is removed, contrast normalised and the ink
+re-coloured so it sits on the page like a real scan. The last signature is
+remembered for reuse during the session.
 
-## Known limitations
+**Editing the pictures already in a document.** Press `P` and every picture on
+the page is outlined; click one — or just double-click it with the Select tool —
+and it is lifted off the page into the overlay. From there it moves, resizes,
+duplicates and deletes like a picture you placed yourself, and **Replace** swaps
+the artwork while keeping the position. The area it used to occupy is covered
+with the colour of the paper immediately around it, sampled from four strips at
+its edges, so a picture on a tinted panel is covered with that tint rather than
+with white. That cover is one flat colour: a picture lying over a gradient, a
+pattern or text will leave a visible patch, and the original bitmap stays in the
+file beneath the cover in the same way text stays beneath a whiteout.
 
-- This is overlay-style editing (add text/ink/images/whiteout on top);
-  it does not rewrite the PDF's existing text runs in place.
-- The rasterizing compressor makes text non-selectable (that's what buys the
-  big size reduction). Use "Lossless re-save" if selectable text matters.
-- Non-Latin text (e.g. বাংলা) and text on rotated pages is embedded as a
-  high-resolution image rather than vector glyphs, because the built-in PDF
-  fonts only cover WinAnsi. It prints and displays fine.
-- Password-protected PDFs and `blob:`/`data:` viewer URLs can't be fetched
-  from a tab — download the file and open it in the editor instead.
+**Editing the text already in a document.** Press `E` and every paragraph on the
+page is outlined; click one — or double-click it with the Select tool — and it
+becomes an editable text box in its place, carrying the same words, size,
+weight, colour, typeface and alignment. Typing re-wraps inside that block.
+
+A **paragraph** is the unit. Editing a single word where it sits would mean
+rewriting the page's content stream, and a paragraph is the smallest block that
+can be re-wrapped without shoving everything around it out of place. Text below
+an edited block does not move: making room would mean re-laying-out the whole
+page, and a PDF has no flow order to re-lay-out along.
+
+**What is detected, and how.** Serif and monospace come from the font
+descriptor's own flags, which pdf.js reports directly. Weight and slope come
+from the font's real PostScript name — `ABCDEF+Arial-BoldMT` and the like —
+which is the only place most PDFs record them; two further cases are caught
+because names alone miss them, a document that fakes bold by stroking its
+glyphs, and one that fakes italic by shearing the text matrix. Size is measured
+as the true height of the em, so a sheared face is not reported a third of a
+point too large, and each font's own ascent is used to place the block rather
+than a fixed guess.
+
+**The typeface itself is matched by kind, not by name.** Only the fourteen
+standard PDF fonts can be embedded without a font toolkit, which this extension
+does not bundle, so a serif paragraph is redrawn in Times, a monospaced one in
+Courier and everything else in Helvetica, at the same weight and slope. The
+shapes will not be identical to the original. The block's original font name and
+size are shown in the toolbar while it is selected, and the size, colour, bold,
+italic and **Face** controls beside them will correct anything detected wrongly. Text the standard fonts cannot represent —
+বাংলা, and anything else outside WinAnsi — is drawn by the browser's own fonts
+and embedded as a high-resolution picture instead, exactly as a new text box is.
+
+**Pages you edit are re-rendered as images when you save.** Covering words does
+not delete them: the originals would otherwise still sit in the file underneath,
+selectable and copyable by anything that looks. Saving turns those pages into
+pictures so the replaced words genuinely stop existing. You are asked to confirm,
+because text on those pages stops being selectable, the file grows, and the page
+cannot be text-edited again in a later session. A left-hand bar marks every block
+you have lifted, so you can see what you changed before committing to that.
+
+**Redaction is real.** Painting a black box over text leaves the text underneath,
+still selectable and still copyable. When a document contains redactions, PDF
+Studio re-renders those pages as images with the boxes burned in, so the covered
+content genuinely stops existing. You are asked to confirm, because text on those
+pages also stops being selectable.
+
+## Reading and navigating
+
+- Thumbnail sidebar, bookmark (outline) panel, form-field panel and a list of
+  your sticky notes — `F4` toggles the sidebar.
+- **Find in document** (`Ctrl+F`) with live highlighting, match counts and
+  jump-to-result.
+- Page box with previous/next, `Page Up` / `Page Down`, zoom (`Ctrl` `+`/`−`/`0`).
+- **Light and dark interface.** The interface is light by default; the sun/moon
+  button switches it and the choice is remembered. It changes the interface
+  only — the page, whiteout, redaction, highlights and the signature pad keep
+  their real colours in both themes, because a whiteout that drew dark would
+  misrepresent what the saved file contains.
+- **Night reading mode** inverts the page without inverting the interface.
+- **Presentation mode** (`F5`) goes full-screen with page snapping.
+- Press `?` for the full shortcut list.
+
+## Pages panel
+
+Stage changes on the thumbnails, then press **Apply changes**:
+
+- Drag to reorder, click to select, `Ctrl`-click for several.
+- Rotate left/right, duplicate, delete, insert a blank page.
+- Extract the selected pages into a new PDF.
+
+## Workbench
+
+One dialog holds everything that produces a new file.
+
+### Convert from PDF
+
+| Output | Notes |
+| --- | --- |
+| **Word** `.docx` | *Flowing text* rebuilds paragraphs, headings, lists and tables — best for editing. *Keep the visual layout* positions every line in its own frame, optionally over a picture of the page |
+| **Excel** `.xlsx` | One sheet per page from the detected table grid, one row per line of text, or everything on a single sheet. Numeric-looking cells become real numbers |
+| **PowerPoint** `.pptx` | One slide per page: a picture of the page with editable text boxes on top, picture only, or text only |
+| **Images** | PNG, JPEG or WebP at 72–400 DPI; several pages arrive as a ZIP |
+| **Web page** `.html` | A readable article, or positioned page-for-page with optional embedded page pictures |
+| **Markdown** `.md` | Headings from font size, lists, and tables as pipe tables |
+| **Plain text** `.txt` | Paragraph flow or original line layout |
+| **CSV** `.csv` | The detected grid, page by page |
+| **JSON** | Pages, paragraphs, lines and coordinates — for feeding something else |
+| **Extract images** | Every bitmap the pages paint, as a ZIP |
+
+A page range (`1-3, 8, 12-`) can be applied to any of them, and your unsaved
+edits are baked in before conversion.
+
+**Scanned pages are read with OCR.** A page that carries no text of its own —
+a scan, a photograph of a document — used to convert to an empty page. It is
+now rendered and recognised, and the words come back as real, reflowable text
+that flows into paragraphs, headings and tables like any other page. English and
+Bengali are bundled and both are on by default; pick one alone if the document
+is only in that language, and the recognition gets a little more certain.
+
+It runs only on pages that have no text at all, so an ordinary PDF never pays
+for it, and it is slow — roughly a second a page, more at the *Careful* setting.
+The result is always flagged in the message after the conversion, because
+recognition is a guess: check the words against the original before relying on
+them. Turn it off with the checkbox if you would rather have the page picture.
+
+Like everything else here it runs on your machine. Tesseract, its WebAssembly
+core and both language models are bundled in `libs/` — see `libs/VENDOR.txt`
+for exact versions, sources and checksums. No page and no word is ever sent
+anywhere.
+
+### Create a PDF
+
+- **Images → PDF** — many at once, page size matched to each image or fitted to
+  A3/A4/A5/Letter/Legal with a margin.
+- **Word / Excel / CSV → PDF** — `.docx` text, styling, headings, lists and
+  tables; spreadsheets as a drawn grid with automatic column widths.
+- **Text file → PDF** — wrapped and paginated.
+
+### Merge & split
+
+Merge the open document with any number of other PDFs (reorderable), or split
+into a ZIP: one file per page, every N pages, or at chosen break points.
+
+### Page layout
+
+Scale by percentage or fit to a paper size (lossless — vectors stay vectors),
+2/4/6/8/9/16 pages per sheet, crop by percentage margins, reverse the page
+order, rotate everything 90°.
+
+### Watermark & numbering
+
+Text or image watermarks with colour, size, opacity, angle, seven positions,
+tiling, a page range and an optional *behind the content* mode. Headers and
+footers take six independent slots and the tokens `{page}` `{pages}` `{date}`
+`{time}` `{filename}` `{bates}` — the last gives Bates numbering with a prefix,
+start value and digit count.
+
+### Resize & compress
+
+Lossless re-save, or true compression by re-rendering pages at a chosen DPI and
+JPEG quality (High / Balanced / Small / Tiny, or custom). Before/after sizes are
+shown; load the result straight back into the editor to keep working.
+
+### Document details
+
+Read and rewrite title, author, subject, keywords, creator and producer. Attach
+files to the PDF, and list or save the files already attached.
+
+### Security
+
+- **Protect with a password** — AES-256 (`R6`), AES-128 (`R4`) or RC4 128-bit
+  (`R3`), separate open and owner passwords, and eight permission flags.
+- **Remove a password** — losslessly where the file's structure allows, with a
+  rebuild-from-pages fallback that always works.
+- **Clean up** — strip everything in a document that can act on its own:
+  document-level JavaScript, open and additional actions, embedded files, XFA,
+  media and file-attachment annotations, launch/submit actions on links, and
+  the keystroke, format, validate and calculate scripts hanging off form
+  fields — including fields with children, which are not annotations on any
+  page and so are easy to miss. Page content, text, field values and ordinary
+  in-document links are left alone. You are told exactly what was taken out.
+
+### Forms
+
+The **Form** side panel lists every AcroForm field with the right control for
+its type — text, checkbox, radio group, dropdown, list — fills them in place,
+and can flatten the result into the page content.
+
+---
+
+## What it does not do
+
+- **Rewriting the text runs themselves.** Editing a paragraph replaces it with a
+  new block drawn on top, rather than altering the glyphs already in the content
+  stream — see **Edit text** above for what follows from that: paragraph
+  granularity, no reflow of the text below, a typeface matched by kind, and the
+  page re-rendered as an image on save.
+- **Reusing the document's own embedded fonts.** Embedding an arbitrary font
+  needs `@pdf-lib/fontkit`, which is not bundled, and the fonts inside a PDF are
+  usually subsets containing only the glyphs the document already used — so a
+  letter you type may have no glyph to draw. The standard-font match above is
+  what is offered instead.
+- **OCR beyond English and Bengali.** Only those two language models are
+  bundled. A page in another script will come back as nonsense rather than as
+  nothing, which is arguably worse — turn OCR off for those.
+- **Perfect conversion.** A PDF has no paragraphs, tables or headings; it has
+  positioned glyphs. All of that structure is *inferred* (see `extract.js`), and
+  complex layouts — multiple columns, nested tables, footnotes — will need
+  tidying afterwards. Always check the result before sending it on. A page that
+  cannot be read at all is skipped and named rather than taking the whole
+  conversion down with it.
+- **Non-Latin text in new text boxes.** The PDF standard fonts only cover
+  WinAnsi, so text such as বাংলা and text on rotated pages is embedded as a
+  high-resolution image instead of vector glyphs. It prints and displays fine.
+- **Removing AES-256 protection losslessly** from files whose objects pdf-lib
+  cannot re-parse. The rebuild fallback covers those, at the cost of selectable
+  text.
+- **Office → PDF fidelity.** Word and spreadsheet import carries text, styling
+  and tables — not floating images, columns, headers or exact pagination.
+
+## Security posture
+
+A PDF is an untrusted document format, so the extension is built as if every
+file it opens is hostile.
+
+- **No network use of your data.** Nothing is uploaded, and there is no
+  telemetry. The one outbound request the extension ever makes is fetching the
+  PDF you asked it to open from the tab you were already looking at.
+- **A locked-down page policy.** `default-src 'none'` with
+  `script-src 'self' 'wasm-unsafe-eval'`, `object-src 'none'`,
+  `frame-src 'none'`, `base-uri 'none'` and `form-action 'none'`. No remote
+  code and no JavaScript `eval` — pdf.js is started with
+  `isEvalSupported: false` so a document's fonts and CMaps cannot reach it.
+- **`wasm-unsafe-eval` is the one concession, and OCR is why.** Recognition
+  runs as WebAssembly, and WebAssembly cannot be compiled at all without it.
+  It permits compiling WebAssembly inside the extension's own origin; it does
+  **not** re-enable `eval`, and `script-src 'self'` still means every byte of
+  code has to come from the extension folder. The bundled `.wasm.js` is the
+  only WebAssembly here, its checksum is recorded in `libs/VENDOR.txt`, and the
+  OCR worker is loaded straight from the extension rather than through a
+  `blob:` URL so `worker-src` stays at `'self'`. If you would rather not have
+  that concession at all, delete `libs/tesseract*`, drop `'wasm-unsafe-eval'`
+  from the manifest and remove the two OCR `<script>` tags — everything else
+  keeps working, and scanned pages go back to converting as pictures.
+- **Two permissions only:** `activeTab` and `contextMenus`. Host access covers
+  `http`, `https` and `file` because the whole point of "Edit this PDF" is
+  fetching the document open in front of you — with your cookies, so PDFs behind
+  a login work. Only those schemes are accepted.
+- **Untrusted text is escaped** wherever it reaches the interface, and download
+  names are stripped of path separators and control characters, so a document
+  cannot use its own title or a bookmark to inject markup or steer a file.
+- **Passwords** live in local variables for the length of one operation and are
+  cleared from their inputs afterwards. They are never stored, logged or copied
+  into document state.
+- **Encryption uses the platform.** Salts, IVs and file keys come from
+  `crypto.getRandomValues`; AES and SHA-2 come from WebCrypto. Only MD5 and RC4,
+  which the older PDF revisions require and no browser exposes, are implemented
+  in this codebase.
+
+## A note on permission flags
+
+The eight permissions in the Security pane (printing, copying, commenting…) are
+what the PDF specification calls *advisory*: they are recorded in the file and
+every well-behaved reader honours them, but nothing enforces them. Only the
+**open password** actually keeps a document shut. RC4 is offered for old readers
+and is not considered secure — prefer AES-256, or AES-128 for wider
+compatibility.
 
 ## Stack
 
-- Manifest V3, no build step, no remote code.
-- `libs/pdf.min.js` + worker — pdfjs-dist 3.11.174 (rendering)
-- `libs/pdf-lib.min.js` — pdf-lib 1.17.1 (writing/stamping/resizing)
+Manifest V3, no build step, no remote code, no network access.
+
+| File | Role |
+| --- | --- |
+| `editor.js` | Viewer, annotation tools, export |
+| `ui.js` | Workbench and side panels |
+| `extract.js` | Text, line, paragraph and table reconstruction |
+| `convert.js` | Every format conversion, in and out |
+| `docops.js` | Page operations, watermarks, numbering, forms, metadata |
+| `pdfcrypt.js` | PDF standard security handler |
+| `theme.js` | Light and dark interface, shared by the editor and the popup |
+| `ocr.js` | Reads scanned pages, in the shape the rest of the pipeline expects |
+
+Vendored libraries, all local:
+
+- `libs/pdf.min.js` + worker — pdfjs-dist 3.11.174 (rendering, text extraction)
+- `libs/pdf-lib.min.js` — pdf-lib 1.17.1 (writing, stamping, page operations)
+- `libs/docx.min.js` — docx 9.7.1 (Word output)
+- `libs/xlsx.full.min.js` — SheetJS 0.18.5 (Excel in and out)
+- `libs/pptxgen.bundle.js` — PptxGenJS 3.12.0 (PowerPoint output)
+- `libs/jszip.min.js` — JSZip 3.10.1 (ZIP output, reading `.docx`)
+- `libs/tesseract*.js` — tesseract.js 6.0.1 and tesseract.js-core 6.1.2 (OCR)
+- `libs/tessdata/*.traineddata.gz` — tessdata_fast 4.0.0, English and Bengali
+
+Checksums and download sources for the OCR components are in `libs/VENDOR.txt`.

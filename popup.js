@@ -1,4 +1,5 @@
 'use strict';
+/* global PSTheme */
 
 function isPdfUrl(u) {
   try {
@@ -19,17 +20,19 @@ function isFetchable(u) {
   }
 }
 
-function openEditor(src) {
-  chrome.runtime.sendMessage({ type: 'open-editor', src: src || '' });
+function openEditor(src, action) {
+  chrome.runtime.sendMessage({ type: 'open-editor', src: src || '', action: action || '' });
   window.close();
 }
 
 const statusEl = document.getElementById('status');
 const btnCurrent = document.getElementById('btn-edit-current');
+const btnConvertCurrent = document.getElementById('btn-convert-current');
 const btnForce = document.getElementById('btn-force');
-const btnOpen = document.getElementById('btn-open');
 
-btnOpen.addEventListener('click', () => openEditor(''));
+document.getElementById('btn-open').addEventListener('click', () => openEditor('', ''));
+document.getElementById('btn-create').addEventListener('click', () => openEditor('', 'create'));
+document.getElementById('btn-merge').addEventListener('click', () => openEditor('', 'organise'));
 
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   const tab = tabs && tabs[0];
@@ -39,12 +42,16 @@ chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     statusEl.textContent = 'PDF detected in this tab';
     statusEl.classList.add('pdf');
     btnCurrent.classList.remove('hidden');
-    btnCurrent.addEventListener('click', () => openEditor(url));
+    btnConvertCurrent.classList.remove('hidden');
+    btnCurrent.addEventListener('click', () => openEditor(url, ''));
+    btnConvertCurrent.addEventListener('click', () => openEditor(url, 'convert'));
   } else if (url && isFetchable(url)) {
     statusEl.textContent = 'This tab does not look like a PDF.';
     btnForce.classList.remove('hidden');
-    btnForce.addEventListener('click', () => openEditor(url));
+    btnForce.addEventListener('click', () => openEditor(url, ''));
   } else {
     statusEl.textContent = 'This page cannot be read. Open the editor and load a file instead.';
   }
 });
+
+PSTheme.register(document.getElementById('btn-theme'));

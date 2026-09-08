@@ -3,18 +3,29 @@
 <head>
   <meta charset="utf-8">
   <link rel="stylesheet" href="popup.css">
+  <script src="theme.js"></script>
 </head>
 <body>
   <div class="brand">
     <img src="icons/icon48.png" alt="" width="22" height="22">
     <span>PDF Studio</span>
+    <button class="icon-btn" id="btn-theme" title="Switch to the dark interface" aria-pressed="false">
+      <svg data-theme-icon="dark" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8.2 8.2 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      <svg data-theme-icon="light" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style="display:none"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
   </div>
 
   <div id="status" class="status">Checking this tab…</div>
 
   <button id="btn-edit-current" class="btn primary hidden">Edit this PDF</button>
+  <button id="btn-convert-current" class="btn hidden">Convert this PDF…</button>
   <button id="btn-force" class="btn ghost hidden">Not detected? Try this page anyway</button>
+
+  <div class="sep"></div>
+
   <button id="btn-open" class="btn">Open the editor</button>
+  <button id="btn-create" class="btn">Create a PDF from other files</button>
+  <button id="btn-merge" class="btn">Merge or split PDFs</button>
 
   <p class="foot">All processing happens on your machine. No files leave the browser.</p>
 
