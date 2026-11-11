@@ -23,12 +23,23 @@ function normRotation(angle) {
   return ((Math.round((angle || 0) / 90) * 90) % 360 + 360) % 360;
 }
 
+/*
+ * pdf-lib pauses on a timer every hundred objects while it reads, and every
+ * fifty while it writes, to keep a page responsive. In a background tab those
+ * timers are held to one a second, so a document of ten thousand objects takes
+ * minutes to save the moment the user looks away. Reading and writing in one
+ * go is faster in front and not at the mercy of the throttle behind.
+ */
 function load(bytes) {
-  return PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+  return PDFDocument.load(bytes, {
+    ignoreEncryption: true,
+    updateMetadata: false,
+    parseSpeed: PDFLib.ParseSpeeds.Fastest
+  });
 }
 
 function save(doc) {
-  return doc.save({ useObjectStreams: true });
+  return doc.save({ useObjectStreams: true, objectsPerTick: Infinity });
 }
 
 function hexToRgb(hex) {
@@ -179,7 +190,7 @@ async function splitDocument(bytes, opts) {
     const label = first === last ? String(first) : first + '-' + last;
     zip.file(o.baseName + '-pages-' + label + '.pdf', part);
     if (o.onProgress) o.onProgress(g + 1, groups.length);
-    await new Promise((r) => setTimeout(r, 0));
+    await PSExtract.tick();
   }
   const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
   return { blob, filename: o.baseName + '-split.zip', parts: groups.length };
@@ -794,26 +805,19 @@ async function rebuildFromDocument(source, opts) {
   const o = Object.assign({ dpi: 200, quality: 0.94 }, opts);
   const out = await PDFDocument.create();
   out.setProducer('PDF Studio');
-  const scale = o.dpi / 72;
 
   for (let i = 0; i < source.numPages; i++) {
     const page = await source.getPage(i + 1);
-    const vp = page.getViewport({ scale });
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.ceil(vp.width));
-    canvas.height = Math.max(1, Math.ceil(vp.height));
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
-
+    const size = page.getViewport({ scale: 1 });
+    const canvas = await PSExtract.renderPageToCanvas(page, o.dpi, '#ffffff');
     const blob = await PSExtract.canvasToBlob(canvas, 'image/jpeg', o.quality);
+    PSExtract.releaseCanvas(canvas);
     const jpg = await out.embedJpg(await blob.arrayBuffer());
-    const np = out.addPage([vp.width / scale, vp.height / scale]);
-    np.drawImage(jpg, { x: 0, y: 0, width: vp.width / scale, height: vp.height / scale });
+    const np = out.addPage([size.width, size.height]);
+    np.drawImage(jpg, { x: 0, y: 0, width: size.width, height: size.height });
     page.cleanup();
     if (o.onProgress) o.onProgress(i + 1, source.numPages);
-    await new Promise((r) => setTimeout(r, 0));
+    await PSExtract.tick();
   }
   if (!out.getPageCount()) throw new Error('That document has no pages to rebuild.');
   return save(out);
@@ -844,18 +848,15 @@ async function rasterizePages(bytes, opts) {
         continue;
       }
       const page = await source.getPage(i + 1);
-      const scale = o.dpi / 72;
-      const vp = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.ceil(vp.width));
-      canvas.height = Math.max(1, Math.ceil(vp.height));
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      const size = page.getViewport({ scale: 1 });
+      const canvas = await PSExtract.renderPageToCanvas(page, o.dpi, '#ffffff');
+      // The canvas says what scale it was really drawn at; a very large page
+      // is drawn smaller than asked to stay inside the browser's limits.
+      const scale = canvas.psScale || o.dpi / 72;
 
       const boxes = o.boxes && o.boxes[i];
       if (boxes) {
+        const ctx = canvas.getContext('2d');
         for (const b of boxes) {
           ctx.fillStyle = b.color || '#000000';
           ctx.fillRect(b.x * scale, b.y * scale, b.w * scale, b.h * scale);
@@ -863,14 +864,13 @@ async function rasterizePages(bytes, opts) {
       }
 
       const blob = await PSExtract.canvasToBlob(canvas, 'image/jpeg', o.quality);
+      PSExtract.releaseCanvas(canvas);
       const jpg = await out.embedJpg(await blob.arrayBuffer());
-      const wPt = vp.width / scale;
-      const hPt = vp.height / scale;
-      const np = out.addPage([wPt, hPt]);
-      np.drawImage(jpg, { x: 0, y: 0, width: wPt, height: hPt });
+      const np = out.addPage([size.width, size.height]);
+      np.drawImage(jpg, { x: 0, y: 0, width: size.width, height: size.height });
       page.cleanup();
       if (o.onProgress) o.onProgress(i + 1, source.numPages);
-      await new Promise((r) => setTimeout(r, 0));
+      await PSExtract.tick();
     }
     return save(out);
   } finally {

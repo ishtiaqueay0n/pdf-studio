@@ -31,7 +31,10 @@ libraries. Every byte stays on your machine.
 ## Editing and markup
 
 Every tool works as an overlay: your changes stay editable until you press
-**Save PDF**, and the original file is never touched.
+**Save PDF**, and the original file is never touched. Everything can be undone
+and redone (`Ctrl+Z`, `Ctrl+Shift+Z`) — adding, deleting, moving, resizing,
+retyping, recolouring — and the selection can be nudged with the arrow keys.
+Closing the tab with unsaved changes asks first.
 
 | Tool | Key | What it does |
 | --- | --- | --- |
@@ -97,13 +100,27 @@ italic and **Face** controls beside them will correct anything detected wrongly.
 বাংলা, and anything else outside WinAnsi — is drawn by the browser's own fonts
 and embedded as a high-resolution picture instead, exactly as a new text box is.
 
-**Pages you edit are re-rendered as images when you save.** Covering words does
-not delete them: the originals would otherwise still sit in the file underneath,
-selectable and copyable by anything that looks. Saving turns those pages into
-pictures so the replaced words genuinely stop existing. You are asked to confirm,
-because text on those pages stops being selectable, the file grows, and the page
-cannot be text-edited again in a later session. A left-hand bar marks every block
-you have lifted, so you can see what you changed before committing to that.
+**The words you replace are taken out of the page, not painted over.** Covering
+words does not delete them: the originals would still sit in the file
+underneath, selectable and copyable by anything that looks. So when you save,
+the page's content stream is rewritten (`contentedit.js`): the glyphs of each
+lifted block are removed and replaced by a movement of exactly their width, so
+nothing else on the line shifts. The page stays what it was — vector, with
+selectable text, and whatever was behind the words still there. The same thing
+is shown while you edit: the lifted words are left out of the page's picture
+rather than hidden under a patch of colour.
+
+The rewrite is checked before it is trusted. The saved page is read back and
+every glyph that was meant to stay must be where it was, and none that was
+meant to go may remain. If that fails — or the text sits inside a form XObject,
+or is set vertically — the page falls back to the old way: the words are
+covered and the page is re-rendered as a picture, and you are asked first,
+because text on that page then stops being selectable. A left-hand bar marks
+every block you have lifted, so you can see what you changed before saving.
+
+A lifted block keeps its place to the point: its first baseline, its line
+spacing and — where the stand-in face allows — its line breaks are the
+original's, and a justified paragraph is still justified.
 
 **Redaction is real.** Painting a black box over text leaves the text underneath,
 still selectable and still copyable. When a document contains redactions, PDF
@@ -155,7 +172,23 @@ One dialog holds everything that produces a new file.
 | **Extract images** | Every bitmap the pages paint, as a ZIP |
 
 A page range (`1-3, 8, 12-`) can be applied to any of them, and your unsaved
-edits are baked in before conversion.
+edits are baked in before conversion. A long conversion can be cancelled, and
+keeps running at full speed if you switch to another tab.
+
+**How the page is read.** Ruled tables are taken from their drawn grid, so
+merged cells and cells holding several lines come out right. The rest of the
+page is cut into columns and borderless tables by its white space and read in
+the order a person would: down one column, then the next. Paragraphs keep their
+inline bold, italic, superscripts and links; lists keep their markers and
+nesting; headings are ranked by size across the whole document; repeated page
+headers, footers and page numbers are left out (there is a checkbox to keep
+them); a paragraph that a column or a page break cut in two is joined again.
+Drawings and pictures are carried into Word and HTML as pictures. Exports that
+lay editable text over a picture of the page (PowerPoint, Word and HTML layout
+modes with a background) draw that picture without the text, so nothing is
+there twice. In Excel, figures become numbers only when they are unmistakably
+numbers — `00123`, a phone number or a 16-digit ID stay text — and keep their
+percent, currency and thousands formatting.
 
 **Scanned pages are read with OCR.** A page that carries no text of its own —
 a scan, a photograph of a document — used to convert to an empty page. It is
@@ -237,11 +270,12 @@ and can flatten the result into the page content.
 
 ## What it does not do
 
-- **Rewriting the text runs themselves.** Editing a paragraph replaces it with a
-  new block drawn on top, rather than altering the glyphs already in the content
-  stream — see **Edit text** above for what follows from that: paragraph
-  granularity, no reflow of the text below, a typeface matched by kind, and the
-  page re-rendered as an image on save.
+- **Editing a single word where it sits.** Editing a paragraph removes its
+  glyphs from the content stream and draws a new block in their place — see
+  **Edit text** above for what follows from that: paragraph granularity, no
+  reflow of the text below, and a typeface matched by kind. Inline styling
+  inside a block (one bold phrase in a plain paragraph) is not carried into the
+  edit box.
 - **Reusing the document's own embedded fonts.** Embedding an arbitrary font
   needs `@pdf-lib/fontkit`, which is not bundled, and the fonts inside a PDF are
   usually subsets containing only the glyphs the document already used — so a
@@ -321,7 +355,8 @@ Manifest V3, no build step, no remote code, no network access.
 | --- | --- |
 | `editor.js` | Viewer, annotation tools, export |
 | `ui.js` | Workbench and side panels |
-| `extract.js` | Text, line, paragraph and table reconstruction |
+| `extract.js` | Layout analysis: columns, paragraphs, lists, headings, tables, figures |
+| `contentedit.js` | Removes text from a page's content stream, with verification |
 | `convert.js` | Every format conversion, in and out |
 | `docops.js` | Page operations, watermarks, numbering, forms, metadata |
 | `pdfcrypt.js` | PDF standard security handler |

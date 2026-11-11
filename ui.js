@@ -1,5 +1,5 @@
 'use strict';
-/* global PS, PSConvert, PSDocOps, PSCrypt, PSExtract, PDFLib */
+/* global PS, PSConvert, PSDocOps, PSCrypt, PSExtract */
 /*
  * The Workbench (conversion, page operations, security, metadata) and the
  * side panels (thumbnails, bookmarks, form fields, notes).
@@ -20,6 +20,9 @@ const resultText = $('#result-text');
 const btnResultLoad = $('#btn-result-load');
 const btnResultDownload = $('#btn-result-download');
 
+const hubNotes = $('#hub-notes');
+const hubCancel = $('#hub-cancel');
+
 let lastResult = null;   // { blob, filename, bytes? }
 
 /* ------------------------------------------------------------------ *
@@ -32,6 +35,30 @@ function setProgress(done, total, label) {
   hubBar.style.width = Math.max(2, Math.min(100, pct)) + '%';
   hubText.textContent = label || (done + ' / ' + total);
 }
+
+/*
+ * Stopping a job.
+ *
+ * Every long job reports its progress page by page, so the report is where it
+ * is stopped: once Cancel has been pressed, the next report throws, and the
+ * error travels back up through whatever converter was running. Nothing has
+ * to be taught how to stop; it only has to say how far it has got.
+ */
+let cancelRequested = false;
+let jobRunning = false;
+
+function jobCancelled() {
+  const err = new Error('Cancelled');
+  err.name = 'JobCancelled';
+  return err;
+}
+
+hubCancel.addEventListener('click', () => {
+  if (!jobRunning) return;
+  cancelRequested = true;
+  hubCancel.disabled = true;
+  hubText.textContent = 'Stopping…';
+});
 
 function showResult(payload) {
   lastResult = payload;
@@ -58,12 +85,24 @@ async function runJob(button, label, fn, opts) {
     showBanner('Open a PDF first.', 'info');
     return;
   }
+  if (jobRunning) {
+    showBanner('Something is still running — wait for it to finish, or cancel it.', 'info');
+    return;
+  }
   const original = button ? button.textContent : '';
   if (button) { button.disabled = true; button.textContent = 'Working…'; }
   resultRow.classList.add('hidden');
+  hubNotes.classList.add('hidden');
+  jobRunning = true;
+  cancelRequested = false;
+  hubCancel.disabled = false;
   setProgress(0, 1, label);
   try {
-    const result = await fn((done, total, text) => setProgress(done, total, text || label));
+    const result = await fn((done, total, text) => {
+      if (cancelRequested) throw jobCancelled();
+      setProgress(done, total, text || label);
+    });
+    if (cancelRequested) throw jobCancelled();
     if (!result) {
       hubProgress.classList.add('hidden');
       return;
@@ -78,18 +117,24 @@ async function runJob(button, label, fn, opts) {
     } else {
       showResult(Object.assign({ compareTo: options.compareTo || 0 }, result));
       // A conversion can succeed and still have lost something. Say so rather
-      // than handing over a file that is quietly empty.
+      // than handing over a file that is quietly empty — and say it next to
+      // the result, where it stays, not in a banner that is gone in seconds.
       if (result.warnings && result.warnings.length) {
-        showBanner(result.warnings.join(' '), 'info');
+        hubNotes.textContent = result.warnings.join(' ');
+        hubNotes.classList.remove('hidden');
       }
     }
   } catch (err) {
-    const message = (err && err.message) || String(err);
-    showBanner(label + ' failed: ' + message);
     hubProgress.classList.add('hidden');
+    if (err && (err.name === 'JobCancelled' || err.name === 'ExportCancelled')) {
+      if (err.name === 'JobCancelled') showBanner(label + ' cancelled.', 'info');
+    } else {
+      showBanner(label + ' failed: ' + ((err && err.message) || String(err)));
+    }
   } finally {
+    jobRunning = false;
     if (button) { button.disabled = false; button.textContent = original; }
-    setTimeout(() => hubProgress.classList.add('hidden'), 400);
+    setTimeout(() => { if (!jobRunning) hubProgress.classList.add('hidden'); }, 400);
   }
 }
 
@@ -98,8 +143,15 @@ btnResultDownload.addEventListener('click', () => {
 });
 btnResultLoad.addEventListener('click', async () => {
   if (!lastResult || !lastResult.bytes) return;
+  if (state.dirty && !(await PS.confirmDialog({
+    title: 'Load the result into the editor?',
+    text: 'It replaces the document that is open. Changes you have not saved in that one will be lost.',
+    ok: 'Load it',
+    danger: true
+  }))) return;
   PS.closeModal(hubModal);
-  await PS.loadBytes(lastResult.bytes, lastResult.filename);
+  // It exists only in this tab until it is saved.
+  await PS.loadBytes(lastResult.bytes, lastResult.filename, { dirty: true });
 });
 
 /* ------------------------------------------------------------------ *
@@ -168,6 +220,7 @@ function convertOptions() {
   const pages = parseRange($('#convert-range').value, state.doc.numPages);
   const base = {
     filename: state.name,
+    dropRunning: $('#convert-running').checked,
     pages: pages || [],
     // OCR only ever fires on a page that has no text at all, so leaving it on
     // costs an ordinary document nothing.
@@ -216,19 +269,30 @@ function convertOptions() {
 $('#btn-convert-run').addEventListener('click', (e) => {
   runJob(e.currentTarget, 'Conversion', async (report) => {
     // Convert what is on screen, edits included, rather than the file on disk.
-    let source = state.doc;
-    let temporary = null;
+    let bytes = state.bytes;
     if (state.objects.length) {
       report(0, 1, 'Baking in your edits');
-      const bytes = await PS.exportAnnotated();
-      temporary = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
-      source = temporary;
+      bytes = await PS.exportAnnotated();
+    }
+    /*
+     * The conversion reads from a copy of the document opened for it alone.
+     * It can then draw pages without their text — for the exports that put
+     * real text over a picture of the page — and it never competes with, or
+     * clears the caches of, the pages being shown. A document that is still
+     * encrypted cannot be opened a second time without its password, so that
+     * one is read through the copy already open.
+     */
+    let source = state.doc;
+    let own = null;
+    if (!state.locked) {
+      own = await PSExtract.openDocument(bytes.slice());
+      source = own;
     }
     try {
       const options = Object.assign(convertOptions(), { onProgress: report });
       return await PSConvert.convertFromPdf(source, convertFormat, options);
     } finally {
-      if (temporary) { try { temporary.destroy(); } catch (err) { /* ignore */ } }
+      if (own) { try { own.destroy(); } catch (err) { /* ignore */ } }
     }
   });
 });
@@ -696,11 +760,13 @@ $('#btn-decrypt-run').addEventListener('click', (e) => {
       // The file's object layout cannot be rewritten in place. The document is
       // already open and decrypted in pdf.js, so rebuild it from those pages
       // rather than trying to parse the encrypted bytes again.
-      if (!window.confirm(
-        'This file cannot be unlocked without rebuilding it.\n\nPDF Studio can re-create it from the ' +
-        'pages as they are displayed. The result opens without a password, but its text becomes part ' +
-        'of the page image and stops being selectable.\n\nRebuild it?'
-      )) return null;
+      if (!(await PS.confirmDialog({
+        title: 'Rebuild this file to unlock it?',
+        text: 'It cannot be unlocked as it is. PDF Studio can re-create it from the pages as ' +
+          'they are displayed: the result opens without a password, but its text becomes part ' +
+          'of the page picture and stops being selectable.',
+        ok: 'Rebuild it'
+      }))) return null;
       report(0, 1, 'Rebuilding pages');
       bytes = await PSDocOps.rebuildFromDocument(state.doc, {
         dpi: 200,
@@ -883,7 +949,9 @@ async function renderThumb(el) {
   if (!p) return;
   const canvas = el.querySelector('canvas');
   const targetW = Math.max(80, thumbsEl.clientWidth - 40);
-  const scale = targetW / p.viewport1.width;
+  // Drawn for the screen's density, so a thumbnail is not a blur on a
+  // high-resolution display.
+  const scale = (targetW / p.viewport1.width) * Math.min(window.devicePixelRatio || 1, 2);
   const vp = p.page.getViewport({ scale, rotation: (p.viewport1.rotation + (step.rotate || 0)) % 360 });
   canvas.width = Math.ceil(vp.width);
   canvas.height = Math.ceil(vp.height);
@@ -973,10 +1041,12 @@ $('#pg-extract').addEventListener('click', () => {
 
 $('#pg-apply').addEventListener('click', async () => {
   if (!planDirty()) return;
-  if (state.objects.length && !window.confirm(
-    'Applying page changes bakes your annotations into the document first, so they can no longer ' +
-    'be edited individually.\n\nContinue?'
-  )) return;
+  if (state.objects.length && !(await PS.confirmDialog({
+    title: 'Apply the page changes?',
+    text: 'Your annotations are baked into the document first, so they can no longer be ' +
+      'moved or edited one by one — and this step cannot be undone.',
+    ok: 'Apply'
+  }))) return;
   const button = $('#pg-apply');
   button.disabled = true;
   const original = button.textContent;
@@ -984,7 +1054,7 @@ $('#pg-apply').addEventListener('click', async () => {
   try {
     const base = await PS.exportAnnotated();
     const bytes = await PSDocOps.applyPagePlan(base, state.pagePlan);
-    await PS.loadBytes(bytes, state.name);
+    await PS.loadBytes(bytes, state.name, { dirty: true });
     showBanner('Page changes applied. Use "Save PDF" to keep them.', 'ok');
   } catch (err) {
     showBanner('Could not apply the page changes: ' + ((err && err.message) || err));
@@ -1109,14 +1179,16 @@ $('#fields-reload').addEventListener('click', buildFields);
  */
 async function applyFieldValues(flatten) {
   if (!formFields.length) return;
-  if (state.objects.length && !window.confirm(
-    'Applying form values bakes your annotations into the document first, so they can no longer ' +
-    'be edited individually.\n\nContinue?'
-  )) return;
+  if (state.objects.length && !(await PS.confirmDialog({
+    title: flatten ? 'Flatten the form?' : 'Apply the form values?',
+    text: 'Your annotations are baked into the document first, so they can no longer be ' +
+      'moved or edited one by one — and this step cannot be undone.',
+    ok: flatten ? 'Flatten' : 'Apply'
+  }))) return;
   try {
     const base = await PS.exportAnnotated();
     const result = await PSDocOps.fillForm(base, collectFieldValues(), { flatten });
-    await PS.loadBytes(result.bytes, state.name);
+    await PS.loadBytes(result.bytes, state.name, { dirty: true });
     if (result.problems.length) {
       showBanner('Filled, with problems: ' + result.problems.join('; '));
     } else {

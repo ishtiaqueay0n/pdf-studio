@@ -476,10 +476,14 @@ select {
   flex: 0 0 auto;
 }
 
+/* Both fill the page whatever size they were drawn at: while a page is being
+   redrawn for a new zoom, the picture it already has is stretched to fit. */
 .page-canvas, .ink-canvas {
   position: absolute;
   inset: 0;
   display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .ink-canvas { pointer-events: none; }
@@ -583,7 +587,10 @@ body.present .page-num { display: none; }
 
 /* A cover stands in for the paper a lifted picture used to sit on, so its
    colour is sampled from the page and set inline rather than themed. */
-.obj-cover { background: #ffffff; }
+.obj-cover { background: #ffffff; pointer-events: none; }
+/* The words it stood over have been left out of the page's picture, so there
+   is nothing for it to hide and whatever was behind them shows through. */
+.obj-cover.clean { background: transparent !important; }
 
 .obj-whiteout { background: #ffffff; }
 .obj-whiteout.selected { outline-style: dashed; }
@@ -926,6 +933,36 @@ body.present .page-num { display: none; }
   border-top: 1px solid var(--border);
 }
 .section h3 { margin: 0 0 4px; font-size: 13px; font-weight: 650; letter-spacing: 0.02em; }
+
+.ask-text { margin: 0 0 4px; color: var(--text); font-size: 13px; line-height: 1.5; }
+#ask-input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+#ask-input:focus { outline: none; border-color: var(--accent); }
+.btn.danger-btn { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.icon-btn:disabled:hover { background: transparent; color: var(--muted); }
+.actions { align-items: center; }
+
+.job-notes {
+  margin: 8px 0 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--banner-info-line);
+  background: var(--banner-info-bg);
+  color: var(--banner-info-fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
 
 .progress { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .bar {

@@ -46,13 +46,17 @@ function available() {
  * One worker is kept alive across pages because starting it costs a second or
  * two and loading a language model costs more. It is keyed by the language set
  * so switching languages replaces it rather than silently using the old one.
+ *
+ * The worker is shared, so what it is told about progress goes through one
+ * slot that each call fills in for the length of its own recognition.
  */
 let current = null;
+let listener = null;
 
-async function getWorker(langs, onProgress) {
+async function getWorker(langs) {
   if (current && current.langs === langs) return current.worker;
   await terminate();
-  const worker = await Tesseract.createWorker(langs, 1 /* LSTM only */, {
+  const starting = Tesseract.createWorker(langs, 1 /* LSTM only */, {
     workerPath: assetUrl(WORKER),
     corePath: assetUrl(CORE),
     langPath: assetUrl(LANG_DIR),
@@ -60,19 +64,26 @@ async function getWorker(langs, onProgress) {
     // blob: URL, so the page policy does not have to allow blob workers.
     workerBlobURL: false,
     gzip: true,
-    logger: onProgress
-      ? (m) => { if (m && m.status) onProgress(m.status, typeof m.progress === 'number' ? m.progress : 0); }
-      : undefined
+    logger: (m) => {
+      if (listener && m && m.status) listener(m.status, typeof m.progress === 'number' ? m.progress : 0);
+    }
   });
-  current = { langs, worker };
-  return worker;
+  // Remember the start itself, so two pages asking at once share one worker
+  // instead of each starting their own.
+  current = { langs, worker: starting };
+  try {
+    return await starting;
+  } catch (err) {
+    if (current && current.worker === starting) current = null;
+    throw err;
+  }
 }
 
 async function terminate() {
   if (!current) return;
-  const { worker } = current;
+  const pending = current.worker;
   current = null;
-  try { await worker.terminate(); } catch (e) { /* already gone */ }
+  try { (await pending).terminate(); } catch (e) { /* already gone */ }
 }
 
 /**
@@ -84,14 +95,33 @@ async function terminate() {
 async function recognizeCanvas(canvas, opts) {
   const o = Object.assign({ dpi: 200, langs: DEFAULT_LANGS }, opts);
   if (!available()) throw new Error('The OCR engine is not available.');
-  const worker = await getWorker(o.langs, o.onProgress);
-  const result = await worker.recognize(canvas, {}, { blocks: true });
-  return itemsFromResult(result && result.data, 72 / (o.dpi || 200));
+  const worker = await getWorker(o.langs);
+  listener = o.onProgress || null;
+  try {
+    const result = await worker.recognize(canvas, {}, { blocks: true });
+    return itemsFromResult(result && result.data, 72 / (o.dpi || 200));
+  } finally {
+    listener = null;
+  }
+}
+
+/** Where a line's baseline is at a given x, from the two points Tesseract gives. */
+function baselineAt(baseline, x, fallback) {
+  if (!baseline || typeof baseline.y0 !== 'number' || typeof baseline.y1 !== 'number') return fallback;
+  const dx = baseline.x1 - baseline.x0;
+  if (!dx) return baseline.y0;
+  return baseline.y0 + (baseline.y1 - baseline.y0) * ((x - baseline.x0) / dx);
 }
 
 /**
  * Recognised words become the same positioned runs pdf.js would have produced,
- * so groupLines and groupParagraphs can do their usual work on them.
+ * so the layout code can do its usual work on them.
+ *
+ * The size and the baseline of every word are taken from its line, not from
+ * the word's own box. A word's box is only as tall as its letters — "one" is
+ * half the height of "play" — so sizing words one at a time gives every line
+ * a different size from word to word, and headings stop being recognisable as
+ * headings.
  *
  * `scale` converts image pixels to PDF points.
  */
@@ -99,43 +129,58 @@ function itemsFromResult(data, scale) {
   const items = [];
   if (!data) return items;
 
-  const words = [];
-  const blocks = data.blocks || [];
-  for (const block of blocks) {
-    for (const para of (block.paragraphs || [])) {
-      for (const line of (para.lines || [])) {
-        for (const word of (line.words || [])) words.push(word);
+  const pushWord = (w, line) => {
+    const text = (w.text || '').trim();
+    if (!text) return;
+    if (typeof w.confidence === 'number' && w.confidence < MIN_CONFIDENCE) return;
+    const b = w.bbox;
+    if (!b) return;
+    const x = b.x0 * scale;
+    const width = (b.x1 - b.x0) * scale;
+    const boxTop = b.y0 * scale;
+    const boxHeight = (b.y1 - b.y0) * scale;
+    if (width <= 0 || boxHeight <= 0) return;
+
+    let size = boxHeight;
+    let baseline = boxTop + boxHeight * 0.82;
+    if (line && line.bbox) {
+      const lineHeight = (line.bbox.y1 - line.bbox.y0) * scale;
+      const attrs = line.rowAttributes || line.row_attributes || {};
+      const rowHeight = (attrs.rowHeight || attrs.row_height || 0) * scale;
+      // The row height is ascender to descender; without it, a line's box is
+      // about that tall as long as the line holds both kinds of letter. The
+      // row height is believed only while it agrees roughly with the box: on
+      // a line taken from inside a ruled table it can be the height of the
+      // cell rather than of the type.
+      size = rowHeight > 2
+        ? Math.min(Math.max(rowHeight, lineHeight * 0.75), lineHeight * 1.35)
+        : lineHeight;
+      if (size > 2) {
+        const guess = line.bbox.y1 * scale - size * 0.22;
+        const read = baselineAt(line.baseline, (b.x0 + b.x1) / 2, null);
+        baseline = read != null ? read * scale : guess;
+        // A baseline outside its own line's box is a misread; fall back.
+        if (baseline < line.bbox.y0 * scale || baseline > line.bbox.y1 * scale + size * 0.2) baseline = guess;
+      } else {
+        size = boxHeight;
       }
     }
-  }
-  // Some builds report only a flat word list.
-  if (!words.length && data.words) words.push(...data.words);
-
-  for (const w of words) {
-    const text = (w.text || '').trim();
-    if (!text) continue;
-    if (typeof w.confidence === 'number' && w.confidence < MIN_CONFIDENCE) continue;
-    const b = w.bbox;
-    if (!b) continue;
-    const x = b.x0 * scale;
-    const y = b.y0 * scale;
-    const width = (b.x1 - b.x0) * scale;
-    const height = (b.y1 - b.y0) * scale;
-    if (width <= 0 || height <= 0) continue;
-    // groupLines works from the baseline; the bottom of the box is close
-    // enough for text that has already been laid out on a page.
-    const size = Math.round(height * 100) / 100;
+    size = Math.round(size * 100) / 100;
     items.push({
       str: text,
       x,
-      baseline: y + height * 0.82,
-      y,
+      baseline,
+      y: baseline - size * 0.8,
       w: width,
-      h: height,
+      h: size,
       size,
+      ascent: 0.8,
+      descent: 0.2,
       angle: 0,
       rotated: false,
       font: 'OCR',
+      fontId: null,
+      face: 'Arial',
       bold: false,
       italic: false,
       mono: false,
@@ -146,7 +191,18 @@ function itemsFromResult(data, scale) {
       confidence: typeof w.confidence === 'number' ? w.confidence : null,
       ocr: true
     });
+  };
+
+  let found = false;
+  for (const block of data.blocks || []) {
+    for (const para of (block.paragraphs || [])) {
+      for (const line of (para.lines || [])) {
+        for (const word of (line.words || [])) { pushWord(word, line); found = true; }
+      }
+    }
   }
+  // Some builds report only a flat word list.
+  if (!found && data.words) for (const word of data.words) pushWord(word, word.line || null);
   return items;
 }
 
@@ -161,26 +217,39 @@ function itemsFromResult(data, scale) {
 async function readPage(pdfPage, pageData, opts) {
   const o = Object.assign({ dpi: 200, langs: DEFAULT_LANGS }, opts);
   const canvas = await PSExtract.renderPageToCanvas(pdfPage, o.dpi, '#ffffff');
-  const items = await recognizeCanvas(canvas, o);
+  // The canvas may have been made smaller than asked to fit the browser's
+  // limits; the scale it was really drawn at is what maps pixels to points.
+  const dpi = canvas.psScale ? canvas.psScale * 72 : o.dpi;
+  const base = Object.assign({}, pageData);
+  if (!base.width) {
+    base.width = (canvas.width * 72) / dpi;
+    base.height = (canvas.height * 72) / dpi;
+  }
+  let items;
+  try {
+    items = await recognizeCanvas(canvas, Object.assign({}, o, { dpi }));
+  } finally {
+    PSExtract.releaseCanvas(canvas);
+  }
   if (!items.length) return null;
+  // A page that was mostly picture but carried a little typed text — a stamp,
+  // a number — keeps that text; the recognised words go round it.
+  const typed = (pageData && pageData.items ? pageData.items : []).filter((it) => it.str && it.str.trim());
+  const merged = typed.length
+    ? typed.concat(items.filter((w) => !typed.some((t) => overlaps(t, w))))
+    : items;
+  const page = PSExtract.pageFromItems(merged, base);
+  if (!page.rows.length) return null;
+  page.ocr = true;
+  page.confidence = averageConfidence(items);
+  return page;
+}
 
-  const { lines } = PSExtract.groupLines(items);
-  if (!lines.length) return null;
-  const width = pageData ? pageData.width : (canvas.width * 72) / o.dpi;
-  const { paragraphs, bodySize, bodyLeft } = PSExtract.groupParagraphs(lines, width);
-  const table = PSExtract.detectTable(lines);
-
-  return Object.assign({}, pageData, {
-    items,
-    lines,
-    paragraphs,
-    table,
-    bodySize,
-    bodyLeft,
-    isEmpty: false,
-    ocr: true,
-    confidence: averageConfidence(items)
-  });
+function overlaps(a, b) {
+  const ax1 = a.x + a.w, bx1 = b.x + b.w;
+  const x = Math.min(ax1, bx1) - Math.max(a.x, b.x);
+  const y = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return x > Math.min(a.w, b.w) * 0.4 && y > Math.min(a.h, b.h) * 0.4;
 }
 
 function averageConfidence(items) {

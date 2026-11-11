@@ -10,13 +10,19 @@
  * Fidelity notes live next to each converter — a PDF has no paragraphs, no
  * tables and no headings, only positioned glyphs, so all of that is inferred
  * (see extract.js) and none of it is guaranteed to be right.
+ *
+ * The converters that produce a document to be read — Word, HTML, Markdown,
+ * text — all work from the same list of blocks in reading order, built once by
+ * flowOf: paragraphs with their runs, tables, pictures and page breaks.
  */
 (function (root) {
 
-const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
+const { PDFDocument, StandardFonts, rgb } = PDFLib;
 
 const PT_PER_INCH = 72;
 const TWIP_PER_PT = 20;
+const PX_PER_PT = 96 / 72;
+const SAVE_OPTIONS = { useObjectStreams: true, objectsPerTick: Infinity };
 
 /* ------------------------------------------------------------------ *
  * Shared helpers
@@ -40,7 +46,7 @@ function pageIndexes(pdf, opts) {
 // pdf-lib's built-in fonts only cover WinAnsi; anything else is replaced so a
 // conversion never dies on a single exotic character.
 const WIN_ANSI_KEEP =
-  /[^\t\n\r\x20-\x7E -ÿ€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/g;
+  /[^\t\n\r\x20-\x7E -ÿ€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/g;
 
 function winAnsiSafe(str) {
   return String(str == null ? '' : str).replace(WIN_ANSI_KEEP, '?');
@@ -68,36 +74,110 @@ function textBlob(text, mime) {
   return new Blob([text], { type: (mime || 'text/plain') + ';charset=utf-8' });
 }
 
-async function blobFromCanvas(canvas, type, quality) {
-  return PSExtract.canvasToBlob(canvas, type, quality);
-}
-
 function canvasDataUrl(canvas, format, quality) {
   return format === 'png'
     ? canvas.toDataURL('image/png')
     : canvas.toDataURL('image/jpeg', quality == null ? 0.82 : quality);
 }
 
+function canRender() {
+  return typeof document !== 'undefined';
+}
+
+async function canvasBytes(canvas, type, quality) {
+  const blob = await PSExtract.canvasToBlob(canvas, type || 'image/png', quality);
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 /**
- * PNG bytes for the pages `want(position)` selects, keyed by their position in
+ * A picture of each page `want(position)` selects, keyed by its position in
  * `indexes` rather than by page number. A page that will not render yields
  * null instead of aborting the whole conversion.
+ *
+ * With `noText` the picture is the page without its text, for exports that
+ * lay real, editable text over it: with the words already in the picture
+ * every one of them would be there twice.
  */
-async function renderPagePngs(pdf, indexes, dpi, want) {
+async function renderPagePictures(pdf, indexes, opts, want) {
+  const o = Object.assign({ dpi: 110, type: 'image/png', quality: 0.86, noText: false }, opts);
   const out = new Array(indexes.length).fill(null);
+  if (!canRender()) return out;
   for (let n = 0; n < indexes.length; n++) {
     if (want && !want(n)) continue;
     let page = null;
+    let canvas = null;
     try {
       page = await pdf.getPage(indexes[n] + 1);
-      const canvas = await PSExtract.renderPageToCanvas(page, dpi || 110, '#ffffff');
-      const blob = await blobFromCanvas(canvas, 'image/png');
-      out[n] = { data: new Uint8Array(await blob.arrayBuffer()) };
+      canvas = await PSExtract.renderPageToCanvas(page, o.dpi, '#ffffff', {
+        noText: o.noText, factory: pdf.psCanvasFactory
+      });
+      out[n] = {
+        data: await canvasBytes(canvas, o.type, o.quality),
+        type: o.type === 'image/jpeg' ? 'jpg' : 'png',
+        mime: o.type
+      };
     } catch (err) {
+      if (err && err.name === 'JobCancelled') throw err;
       out[n] = null;
     } finally {
+      PSExtract.releaseCanvas(canvas);
       if (page) { try { page.cleanup(); } catch (err) { /* already gone */ } }
     }
+    if (o.onProgress) o.onProgress(n + 1, indexes.length);
+    await PSExtract.tick();
+  }
+  return out;
+}
+
+/**
+ * The pictures and drawings the layout found, cut out of a rendering of their
+ * page. Cutting them from the page, rather than digging out the bitmap behind
+ * each, gets a drawing made of vectors and a photograph the same way, already
+ * clipped, masked and turned as the page shows them.
+ *
+ * Returns a Map from the layout's picture block to { data, url, width, height }.
+ */
+async function renderPictures(pdf, doc, opts) {
+  const o = Object.assign({ dpi: 160, urls: false }, opts);
+  const out = new Map();
+  if (!canRender() || o.images === false) return out;
+  for (const pageData of doc.pages) {
+    const blocks = pageData.blocks.filter((b) => b.type === 'image');
+    if (!blocks.length) continue;
+    let page = null;
+    let canvas = null;
+    try {
+      page = await pdf.getPage(pageData.index + 1);
+      canvas = await PSExtract.renderPageToCanvas(page, o.dpi, '#ffffff');
+      const scale = canvas.width / pageData.width;
+      for (const block of blocks) {
+        const im = block.image;
+        const pad = im.kind === 'figure' ? 2 : 0;
+        const sx = Math.max(0, Math.floor((im.x - pad) * scale));
+        const sy = Math.max(0, Math.floor((im.y - pad) * scale));
+        const sw = Math.min(canvas.width - sx, Math.ceil((im.w + pad * 2) * scale));
+        const sh = Math.min(canvas.height - sy, Math.ceil((im.h + pad * 2) * scale));
+        if (sw < 2 || sh < 2) continue;
+        const crop = document.createElement('canvas');
+        crop.width = sw;
+        crop.height = sh;
+        crop.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        out.set(im, {
+          data: o.urls ? null : await canvasBytes(crop, 'image/png'),
+          url: o.urls ? crop.toDataURL('image/png') : null,
+          width: im.w + pad * 2,
+          height: im.h + pad * 2
+        });
+        PSExtract.releaseCanvas(crop);
+      }
+    } catch (err) {
+      if (err && err.name === 'JobCancelled') throw err;
+      /* a page that will not render simply carries no pictures */
+    } finally {
+      PSExtract.releaseCanvas(canvas);
+      if (page) { try { page.cleanup(); } catch (err) { /* already gone */ } }
+    }
+    await PSExtract.tick();
   }
   return out;
 }
@@ -123,9 +203,24 @@ function ocrHook(o) {
         }
       });
     } catch (err) {
+      if (err && err.name === 'JobCancelled') throw err;
       return null; // still unreadable; warningsForDocument says so
     }
   };
+}
+
+function readDocument(pdf, o, extra) {
+  const onProgress = progressFn(o);
+  const indexes = pageIndexes(pdf, o);
+  return PSExtract.extractDocument(pdf, Object.assign({
+    pages: indexes,
+    onProgress: (i, n) => onProgress(i, n + 1, 'Reading page ' + i + ' of ' + n),
+    onEmptyPage: ocrHook(o)
+  }, extra));
+}
+
+function pageHasContent(p) {
+  return p.blocks.some((b) => b.type !== 'paragraph' || b.para.text.trim());
 }
 
 /**
@@ -135,8 +230,7 @@ function ocrHook(o) {
 function warningsForDocument(doc, note) {
   const warnings = [];
   const unreadable = doc.pages.filter((p) => p.unreadable).map((p) => p.number);
-  const scanned = doc.pages.filter((p) => !p.unreadable && !p.paragraphs.length && !p.table)
-    .map((p) => p.number);
+  const scanned = doc.pages.filter((p) => !p.unreadable && !pageHasContent(p)).map((p) => p.number);
   if (unreadable.length) {
     warnings.push('Could not read ' + describePages(unreadable) + ' — ' +
       ((doc.failed && doc.failed.length && doc.failed[0].message) || 'the page was skipped') + '.');
@@ -171,362 +265,85 @@ function describePages(numbers) {
 }
 
 /* ------------------------------------------------------------------ *
- * PDF -> Word
+ * The document as a flow
  * ------------------------------------------------------------------ */
 
-const HEADING_LEVELS = [null, 'Heading1', 'Heading2', 'Heading3', 'Heading4'];
-
-function docxRunsForParagraph(p, opts) {
-  const D = docx;
-  const size = Math.round(Math.max(6, p.size) * 2); // half-points
-  return [new D.TextRun({
-    text: p.text,
-    bold: p.bold || undefined,
-    italics: p.italic || undefined,
-    size,
-    color: opts.color === false ? undefined : docxColor(p.color),
-    font: p.mono ? 'Consolas' : (opts.font || 'Calibri')
-  })];
+function sameStyle(a, b) {
+  return a.key === b.key;
 }
 
-function docxAlignment(align) {
-  const D = docx;
-  if (align === 'center') return D.AlignmentType.CENTER;
-  if (align === 'right') return D.AlignmentType.RIGHT;
-  return D.AlignmentType.LEFT;
-}
-
-function docxTable(table, opts) {
-  const D = docx;
-  const rows = table.rows.map((cells, ri) => new D.TableRow({
-    tableHeader: ri === 0 || undefined,
-    children: cells.map((text) => new D.TableCell({
-      children: [new D.Paragraph({
-        children: [new D.TextRun({
-          text: String(text || ''),
-          bold: ri === 0 || undefined,
-          size: Math.round((opts.tableFontSize || 10) * 2),
-          font: opts.font || 'Calibri'
-        })]
-      })]
-    }))
-  }));
-  return new D.Table({ rows, width: { size: 100, type: D.WidthType.PERCENTAGE } });
-}
-
-function docxParagraph(p, opts) {
-  const D = docx;
-  const conf = {
-    children: docxRunsForParagraph(p, opts),
-    alignment: docxAlignment(p.align),
-    spacing: { after: 120 }
-  };
-  if (p.heading && HEADING_LEVELS[p.heading]) conf.heading = HEADING_LEVELS[p.heading];
-  if (p.bullet) conf.bullet = { level: 0 };
-  return new D.Paragraph(conf);
+/** Append the runs of a carried-over paragraph to the runs of its first half. */
+function joinRuns(head, tail) {
+  const out = head.map((r) => Object.assign({}, r));
+  const last = out[out.length - 1];
+  const first = tail[0];
+  if (!last || !first) return out.concat(tail);
+  const joined = PSExtract.joinContinued(last.text, first.text);
+  // joinContinued either closed a hyphenated word or put one space between.
+  last.text = joined.slice(0, joined.length - first.text.length);
+  for (const run of tail) {
+    const prev = out[out.length - 1];
+    if (sameStyle(prev, run)) prev.text += run.text;
+    else out.push(Object.assign({}, run));
+  }
+  return out;
 }
 
 /**
- * A paragraph belongs to the table when most of the lines it was built from
- * became table rows. Table detection is a guess, so a page holding a table
- * usually holds prose as well — that prose has to survive.
+ * Every block of the document in the order it is read, as one list:
+ *
+ *   { type: 'paragraph', para, runs, text }
+ *   { type: 'table', table }
+ *   { type: 'image', image }
+ *   { type: 'pageimage', index }   a page with nothing readable on it
+ *   { type: 'break' }              where a new page began
+ *
+ * Running headers and footers are left out, and a paragraph that a column or
+ * a page had cut in two is one paragraph again.
  */
-function paragraphInTable(p, sourceLines) {
-  if (!sourceLines || !p.lines || !p.lines.length) return false;
-  let n = 0;
-  for (const line of p.lines) if (sourceLines.has(line)) n++;
-  return n * 2 > p.lines.length;
-}
-
-/** A picture of the page, for pages with no text to convert. */
-function docxPageImage(img, page) {
-  const D = docx;
-  const scale = Math.min(1, 468 / Math.max(1, page.width)); // fit the text column
-  return new D.Paragraph({
-    children: [new D.ImageRun({
-      data: img.data,
-      type: 'png',
-      transformation: {
-        width: Math.round(page.width * scale),
-        height: Math.round(page.height * scale)
-      }
-    })]
-  });
-}
-
-function docxFlowChildren(pages, opts, pageImages) {
-  const D = docx;
-  const children = [];
-  pages.forEach((page, pi) => {
-    if (pi > 0) {
-      children.push(new D.Paragraph({ children: [new D.PageBreak()] }));
-    }
-
-    const table = (opts.tables && page.table) ? page.table : null;
-    const sourceLines = table ? table.sourceLines : null;
-    let tableWritten = false;
-    let wrote = false;
-
-    for (const p of page.paragraphs) {
-      if (paragraphInTable(p, sourceLines)) {
-        // The table stands in for its own paragraphs, once, where they began.
-        if (!tableWritten) {
-          children.push(docxTable(table, opts));
-          children.push(new D.Paragraph({ text: '' }));
-          tableWritten = true;
-          wrote = true;
-        }
-        continue;
-      }
-      if (!p.text.trim()) continue;
-      children.push(docxParagraph(p, opts));
-      wrote = true;
-    }
-
-    // Older extractions carry no line provenance; the table still belongs.
-    if (table && !tableWritten) {
-      children.push(docxTable(table, opts));
-      children.push(new D.Paragraph({ text: '' }));
-      wrote = true;
-    }
-    if (wrote) return;
-
-    const img = pageImages && pageImages[pi];
-    if (img) { children.push(docxPageImage(img, page)); return; }
-    children.push(new D.Paragraph({ text: '' }));
-  });
-  return children;
-}
-
-function docxLayoutSections(pages, opts, backgrounds, pageImages) {
-  const D = docx;
-  return pages.map((page, pi) => {
-    const children = [];
-    if (backgrounds && backgrounds[pi]) {
-      const bg = backgrounds[pi];
-      children.push(new D.Paragraph({
-        children: [new D.ImageRun({
-          data: bg.data,
-          type: 'png',
-          transformation: { width: Math.round(page.width), height: Math.round(page.height) },
-          floating: {
-            horizontalPosition: { offset: 0 },
-            verticalPosition: { offset: 0 },
-            behindDocument: true,
-            zIndex: 0
-          }
-        })]
-      }));
-    }
-    for (const line of page.lines) {
-      if (!line.text.trim()) continue;
-      children.push(new D.Paragraph({
-        frame: {
-          type: 'absolute',
-          position: {
-            x: Math.round(line.x * TWIP_PER_PT),
-            y: Math.round(line.y * TWIP_PER_PT)
-          },
-          width: Math.round(Math.max(line.w + line.size, line.size) * TWIP_PER_PT),
-          height: Math.round(Math.max(line.h, line.size * 1.25) * TWIP_PER_PT),
-          anchor: { horizontal: 'page', vertical: 'page' },
-          wrap: 'none'
-        },
-        spacing: { before: 0, after: 0, line: Math.round(line.size * 1.05 * TWIP_PER_PT) },
-        children: [new D.TextRun({
-          text: line.text.replace(/\t/g, '  '),
-          bold: line.bold || undefined,
-          italics: line.italic || undefined,
-          size: Math.round(Math.max(6, line.size) * 2),
-          color: opts.color === false ? undefined : docxColor(line.color),
-          font: line.mono ? 'Consolas' : (opts.font || 'Calibri')
-        })]
-      }));
-    }
-    if (!children.length) {
-      const img = pageImages && pageImages[pi];
-      children.push(img ? docxPageImage(img, page) : new D.Paragraph({ text: '' }));
-    }
-    return {
-      properties: {
-        type: pi === 0 ? undefined : D.SectionType.NEXT_PAGE,
-        page: {
-          size: {
-            width: Math.round(page.width * TWIP_PER_PT),
-            height: Math.round(page.height * TWIP_PER_PT),
-            orientation: page.width > page.height
-              ? D.PageOrientation.LANDSCAPE
-              : D.PageOrientation.PORTRAIT
-          },
-          margin: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0, gutter: 0 }
-        }
-      },
-      children
+function flowOf(doc, opts) {
+  const o = Object.assign({ dropRunning: true, pageBreaks: true }, opts);
+  const out = [];
+  let open = null;
+  doc.pages.forEach((page, pi) => {
+    let started = false;
+    const begin = () => {
+      if (!started && pi > 0 && o.pageBreaks && out.length) out.push({ type: 'break' });
+      started = true;
     };
-  });
-}
-
-/**
- * PDF -> .docx
- *
- * mode 'flow'   — reflowable paragraphs, headings, lists and tables. Best for
- *                 editing; the visual layout is not preserved.
- * mode 'layout' — every text line becomes an absolutely positioned frame, so
- *                 the page looks close to the original but is awkward to edit.
- */
-async function toDocx(pdf, opts) {
-  const o = Object.assign({ mode: 'flow', tables: true, font: 'Calibri', background: false, dpi: 110 }, opts);
-  const onProgress = progressFn(o);
-  const indexes = pageIndexes(pdf, o);
-  onProgress(0, indexes.length + 1, 'Reading text');
-  const doc = await PSExtract.extractDocument(pdf, {
-    pages: indexes,
-    onProgress: (i, n) => onProgress(i, n + 1, 'Reading page ' + i + ' of ' + n),
-    onEmptyPage: ocrHook(o)
-  });
-
-  const warnings = warningsForDocument(doc, 'A picture of each was used instead.');
-
-  let backgrounds = null;
-  if (o.mode === 'layout' && o.background) {
-    backgrounds = await renderPagePngs(pdf, indexes, o.dpi, () => true);
-  }
-
-  // Pages that carry no text at all — scans, or pages pdf.js could not read —
-  // used to come out as an empty Word page with no explanation. A picture of
-  // the page is not editable text, but it is the content.
-  let pageImages = null;
-  if (o.imageFallback !== false) {
-    const empty = doc.pages.map((p) => !p.paragraphs.length && !p.table);
-    if (empty.some(Boolean)) {
-      pageImages = await renderPagePngs(pdf, indexes, o.dpi, (n) => empty[n]);
-    }
-  }
-
-  const D = docx;
-  const first = doc.pages[0] || { width: 595, height: 842 };
-  const sections = o.mode === 'layout'
-    ? docxLayoutSections(doc.pages, o, backgrounds, pageImages)
-    : [{
-        properties: {
-          page: {
-            size: {
-              width: Math.round(first.width * TWIP_PER_PT),
-              height: Math.round(first.height * TWIP_PER_PT),
-              orientation: first.width > first.height
-                ? D.PageOrientation.LANDSCAPE
-                : D.PageOrientation.PORTRAIT
-            },
-            margin: {
-              top: Math.round(36 * TWIP_PER_PT),
-              bottom: Math.round(36 * TWIP_PER_PT),
-              left: Math.round(Math.min(72, Math.max(24, first.bodyLeft || 54)) * TWIP_PER_PT),
-              right: Math.round(36 * TWIP_PER_PT)
-            }
-          }
-        },
-        children: docxFlowChildren(doc.pages, o, pageImages)
-      }];
-
-  const document = new D.Document({
-    creator: 'PDF Studio',
-    title: o.title || baseName(o.filename),
-    description: 'Converted from PDF by PDF Studio',
-    sections
-  });
-  onProgress(indexes.length + 1, indexes.length + 1, 'Writing document');
-  const blob = await D.Packer.toBlob(document);
-  return { blob, filename: baseName(o.filename) + '.docx', warnings };
-}
-
-/* ------------------------------------------------------------------ *
- * PDF -> Excel
- * ------------------------------------------------------------------ */
-
-function coerceCell(v) {
-  const s = String(v == null ? '' : v).trim();
-  if (!s) return '';
-  const numeric = s.replace(/[\s,](?=\d)/g, '').replace(/^\((.*)\)$/, '-$1');
-  if (/^-?\d+(\.\d+)?%$/.test(numeric)) {
-    const n = parseFloat(numeric);
-    if (!isNaN(n)) return n / 100;
-  }
-  if (/^[-+]?\d{1,15}(\.\d+)?$/.test(numeric)) {
-    const n = Number(numeric);
-    if (!isNaN(n)) return n;
-  }
-  return s;
-}
-
-/**
- * PDF -> .xlsx
- *
- * mode 'tables' — one sheet per page holding the detected grid.
- * mode 'lines'  — one sheet per page, one row per text line.
- * mode 'single' — every page appended to a single sheet.
- */
-async function toXlsx(pdf, opts) {
-  const o = Object.assign({ mode: 'tables', numbers: true, sheetPerPage: true }, opts);
-  const onProgress = progressFn(o);
-  const indexes = pageIndexes(pdf, o);
-  const doc = await PSExtract.extractDocument(pdf, {
-    pages: indexes,
-    detectTables: o.mode !== 'lines',
-    onProgress: (i, n) => onProgress(i, n, 'Reading page ' + i + ' of ' + n),
-    onEmptyPage: ocrHook(o)
-  });
-
-  const wb = XLSX.utils.book_new();
-  const usedNames = new Set();
-  const sheetName = (want) => {
-    let name = String(want).replace(/[\\/?*[\]:]/g, ' ').slice(0, 28) || 'Sheet';
-    let i = 2;
-    while (usedNames.has(name)) name = (String(want).slice(0, 24) + ' ' + i++).trim();
-    usedNames.add(name);
-    return name;
-  };
-
-  const convertRow = (row) => (o.numbers ? row.map(coerceCell) : row.map((c) => String(c == null ? '' : c)));
-
-  if (o.mode === 'single' || !o.sheetPerPage) {
-    const all = [];
-    for (const page of doc.pages) {
-      if (doc.pages.length > 1) all.push(['Page ' + page.number]);
-      for (const row of PSExtract.pageToGrid(page)) all.push(convertRow(row));
-      all.push([]);
-    }
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(all), sheetName('Document'));
-  } else {
-    for (const page of doc.pages) {
-      const rows = PSExtract.pageToGrid(page).map(convertRow);
-      const ws = XLSX.utils.aoa_to_sheet(rows.length ? rows : [['']]);
-      const widths = [];
-      for (const row of rows) {
-        row.forEach((cell, c) => {
-          const len = String(cell == null ? '' : cell).length;
-          widths[c] = Math.min(60, Math.max(widths[c] || 8, len + 2));
-        });
+    for (const block of page.blocks) {
+      if (block.type === 'paragraph') {
+        const p = block.para;
+        if (!p.text.trim()) continue;
+        if (o.dropRunning && p.artifact) continue;
+        if (p.continues && open) {
+          open.runs = joinRuns(open.runs, p.runs);
+          open.text = PSExtract.joinContinued(open.text, p.text);
+          started = true;       // the page carried straight on; no break belongs here
+          continue;
+        }
+        begin();
+        open = { type: 'paragraph', para: p, runs: p.runs, text: p.text, page };
+        out.push(open);
+      } else if (block.type === 'table') {
+        begin();
+        out.push({ type: 'table', table: block.table, page });
+      } else if (block.type === 'image') {
+        begin();
+        out.push({ type: 'image', image: block.image, page });
       }
-      ws['!cols'] = widths.map((w) => ({ wch: w }));
-      XLSX.utils.book_append_sheet(wb, ws, sheetName('Page ' + page.number));
     }
-  }
-
-  if (!wb.SheetNames.length) {
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['']]), 'Sheet1');
-  }
-  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-  return {
-    blob: new Blob([out], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    }),
-    filename: baseName(o.filename) + '.xlsx',
-    warnings: warningsForDocument(doc)
-  };
+    if (!started) {
+      if (pi > 0 && o.pageBreaks && out.length) out.push({ type: 'break' });
+      out.push({ type: 'pageimage', index: pi, page });
+      open = null;
+    }
+  });
+  return out;
 }
 
 /* ------------------------------------------------------------------ *
- * PDF -> PowerPoint
+ * PDF -> Word
  * ------------------------------------------------------------------ */
 
 function hexFromColor(c) {
@@ -555,12 +372,601 @@ function cssColor(c) {
   return isHexColor(c) && c.toLowerCase() !== '#000000' ? 'color:' + c.toLowerCase() : '';
 }
 
+/** Only web and mail addresses become links; anything else stays as text. */
+function safeLink(url) {
+  return /^(https?:\/\/|mailto:|ftp:\/\/)[^\s"<>]+$/i.test(url || '') ? url : null;
+}
+
+function twip(points) {
+  return Math.round(points * TWIP_PER_PT);
+}
+
+function docxRun(run, o, base, extra) {
+  const D = docx;
+  // Word shrinks a superscript itself, so it is given the size of the text it
+  // sits in rather than the size it was drawn at.
+  const size = run.script ? Math.max(run.size, base || run.size) : run.size;
+  const conf = {
+    text: run.text,
+    bold: run.bold || undefined,
+    italics: run.italic || undefined,
+    size: Math.round(Math.max(5, size) * 2),
+    color: o.color === false ? undefined : docxColor(run.color),
+    font: o.font || run.face || 'Arial',
+    superScript: run.script === 'sup' || undefined,
+    subScript: run.script === 'sub' || undefined,
+    underline: run.underline ? {} : undefined
+  };
+  return new D.TextRun(Object.assign(conf, extra));
+}
+
+/** Runs as Word inline content, with neighbouring linked runs under one link. */
+function docxInline(runs, o, base, firstExtra) {
+  const D = docx;
+  const out = [];
+  let i = 0;
+  let first = true;
+  while (i < runs.length) {
+    const link = safeLink(runs[i].link);
+    const extraFor = () => {
+      const e = first ? firstExtra : undefined;
+      first = false;
+      return e;
+    };
+    if (!link) {
+      out.push(docxRun(runs[i], o, base, extraFor()));
+      i++;
+      continue;
+    }
+    const kids = [];
+    while (i < runs.length && runs[i].link === runs[i - kids.length].link && safeLink(runs[i].link)) {
+      kids.push(docxRun(runs[i], o, base, Object.assign({ color: '0563C1', underline: {} }, extraFor())));
+      i++;
+    }
+    out.push(new D.ExternalHyperlink({ link, children: kids }));
+  }
+  return out;
+}
+
+function docxAlignment(align) {
+  const D = docx;
+  if (align === 'center') return D.AlignmentType.CENTER;
+  if (align === 'right') return D.AlignmentType.RIGHT;
+  if (align === 'justify') return D.AlignmentType.BOTH;
+  return D.AlignmentType.LEFT;
+}
+
+const DOCX_HEADINGS = [null, 'Heading1', 'Heading2', 'Heading3', 'Heading4', 'Heading5', 'Heading6'];
+
+function docxParagraph(entry, o) {
+  const D = docx;
+  const p = entry.para;
+  const conf = {
+    children: docxInline(entry.runs, o, p.size),
+    alignment: docxAlignment(p.align),
+    spacing: { after: 120 }
+  };
+  // Text set with wide leading — double-spaced, say — keeps it. Single
+  // spacing in Word is about 1.2 times the size of the type.
+  if (p.leading >= 1.45) conf.spacing.line = Math.round(Math.min(3, p.leading / 1.2) * 240);
+
+  if (p.heading && DOCX_HEADINGS[p.heading]) {
+    conf.heading = DOCX_HEADINGS[p.heading];
+    conf.spacing.before = 200;
+    conf.keepNext = true;
+  } else if (p.bullet) {
+    const level = Math.min(p.listLevel || 0, 8);
+    conf.spacing.after = 60;
+    if (p.ordered) {
+      /*
+       * The number is written out rather than left to Word's own numbering.
+       * A list that starts at 4, or runs (a), (b), (c), then stays exactly as
+       * it was, and two separate lists cannot run on into one.
+       */
+      const lead = entry.runs[0] || { size: p.size, face: p.face, color: p.color };
+      conf.children.unshift(new D.TextRun({
+        children: [p.marker, new D.Tab()],
+        size: Math.round(Math.max(5, lead.size) * 2),
+        font: o.font || lead.face || 'Arial',
+        color: o.color === false ? undefined : docxColor(lead.color)
+      }));
+      conf.indent = { left: 540 + 360 * level, hanging: 400 };
+    } else {
+      conf.bullet = { level };
+    }
+  } else if (p.align === 'left' || p.align === 'justify') {
+    const em = p.size;
+    const indent = {};
+    if (p.left > em * 0.75) indent.left = twip(Math.min(p.left, 216));
+    if (p.indent > em * 0.4) indent.firstLine = twip(Math.min(p.indent, 72));
+    else if (p.indent < -em * 0.4) {
+      indent.hanging = twip(Math.min(-p.indent, 72));
+      indent.left = (indent.left || 0) + indent.hanging;
+    }
+    if (indent.left || indent.firstLine || indent.hanging) conf.indent = indent;
+  }
+  return new D.Paragraph(conf);
+}
+
+function docxTable(table, o) {
+  const D = docx;
+  const widths = [];
+  for (let c = 0; c < table.ncols; c++) widths.push(Math.max(18, table.colX[c + 1] - table.colX[c]));
+  const total = widths.reduce((a, b) => a + b, 0);
+  const fit = o.availWidth && total > o.availWidth ? o.availWidth / total : 1;
+  const colTwips = widths.map((w) => twip(w * fit));
+
+  const line = table.ruled
+    ? { style: D.BorderStyle.SINGLE, size: 4, color: '808080' }
+    : { style: D.BorderStyle.NONE, size: 0, color: 'auto' };
+
+  const rows = table.cells.map((row, r) => new D.TableRow({
+    tableHeader: r < table.header || undefined,
+    cantSplit: true,
+    children: row.filter(Boolean).map((cell) => {
+      const runs = PSExtract.buildRuns(cell.lines);
+      let width = 0;
+      for (let c = cell.col; c < cell.col + cell.colspan; c++) width += colTwips[c] || 0;
+      return new D.TableCell({
+        width: { size: width, type: D.WidthType.DXA },
+        columnSpan: cell.colspan > 1 ? cell.colspan : undefined,
+        rowSpan: cell.rowspan > 1 ? cell.rowspan : undefined,
+        margins: { top: 40, bottom: 40, left: 80, right: 80 },
+        children: [new D.Paragraph({
+          alignment: docxAlignment(cell.align),
+          spacing: { after: 0 },
+          children: runs.length ? docxInline(runs, o, runs[0].size) : []
+        })]
+      });
+    })
+  }));
+
+  return new D.Table({
+    rows,
+    width: { size: colTwips.reduce((a, b) => a + b, 0), type: D.WidthType.DXA },
+    columnWidths: colTwips,
+    layout: D.TableLayoutType.FIXED,
+    borders: {
+      top: line, bottom: line, left: line, right: line,
+      insideHorizontal: line, insideVertical: line
+    }
+  });
+}
+
+function docxPicture(pic, maxWidth) {
+  const D = docx;
+  const scale = Math.min(1, maxWidth / Math.max(1, pic.width));
+  return new D.Paragraph({
+    alignment: D.AlignmentType.CENTER,
+    spacing: { before: 80, after: 120 },
+    children: [new D.ImageRun({
+      data: pic.data,
+      type: pic.type || 'png',
+      transformation: {
+        width: Math.round(pic.width * scale * PX_PER_PT),
+        height: Math.round(pic.height * scale * PX_PER_PT)
+      }
+    })]
+  });
+}
+
+function docxFlowChildren(flow, o, pictures, pageImages) {
+  const D = docx;
+  const children = [];
+  let pendingBreak = false;
+  const add = (node) => {
+    if (pendingBreak) {
+      children.push(new D.Paragraph({ children: [new D.PageBreak()] }));
+      pendingBreak = false;
+    }
+    children.push(node);
+  };
+  for (const entry of flow) {
+    if (entry.type === 'break') {
+      pendingBreak = true;
+    } else if (entry.type === 'paragraph') {
+      add(docxParagraph(entry, o));
+    } else if (entry.type === 'table') {
+      add(docxTable(entry.table, o));
+      children.push(new D.Paragraph({ spacing: { after: 60 }, children: [] }));
+    } else if (entry.type === 'image') {
+      const pic = pictures.get(entry.image);
+      if (pic) add(docxPicture(pic, o.availWidth));
+    } else if (entry.type === 'pageimage') {
+      // A page with no text at all — a scan, or one pdf.js could not read. A
+      // picture of it is not editable text, but it is the content.
+      const img = pageImages && pageImages[entry.index];
+      if (img) {
+        add(docxPicture({
+          data: img.data, type: img.type, width: entry.page.width, height: entry.page.height
+        }, o.availWidth));
+      } else {
+        add(new D.Paragraph({ children: [] }));
+      }
+    }
+  }
+  if (!children.length) children.push(new D.Paragraph({ children: [] }));
+  return children;
+}
+
+function floatingAt(x, y, behind) {
+  const D = docx;
+  return {
+    horizontalPosition: { relative: D.HorizontalPositionRelativeFrom.PAGE, offset: Math.round(x * 12700) },
+    verticalPosition: { relative: D.VerticalPositionRelativeFrom.PAGE, offset: Math.round(y * 12700) },
+    behindDocument: behind !== false,
+    allowOverlap: true,
+    zIndex: 0
+  };
+}
+
+/*
+ * One box of text per paragraph and per table cell, placed where it sat on the
+ * page, with a line break wherever the original broke. That keeps the look of
+ * the page while leaving each paragraph one thing to click into and retype,
+ * rather than a stack of single lines.
+ */
+function docxLayoutSections(doc, o, backgrounds, pictures, pageImages) {
+  const D = docx;
+  return doc.pages.map((page, pi) => {
+    const children = [];
+    const floats = [];
+    const bg = backgrounds && backgrounds[pi];
+    if (bg) {
+      floats.push(new D.ImageRun({
+        data: bg.data,
+        type: bg.type,
+        transformation: {
+          width: Math.round(page.width * PX_PER_PT), height: Math.round(page.height * PX_PER_PT)
+        },
+        floating: floatingAt(0, 0)
+      }));
+    } else {
+      for (const block of page.blocks) {
+        if (block.type !== 'image') continue;
+        const pic = pictures.get(block.image);
+        if (!pic) continue;
+        floats.push(new D.ImageRun({
+          data: pic.data,
+          type: 'png',
+          transformation: {
+            width: Math.round(pic.width * PX_PER_PT), height: Math.round(pic.height * PX_PER_PT)
+          },
+          floating: floatingAt(block.image.x, block.image.y)
+        }));
+      }
+    }
+    if (floats.length) children.push(new D.Paragraph({ children: floats }));
+
+    for (const b of PSExtract.textBlocks(page)) {
+      if (!b.text.trim()) continue;
+      // The invisible layer under a scan would print on top of the scan.
+      if (bg && b.invisible) continue;
+      const lines = b.lines;
+      const size = b.size;
+      const pitch = lines.length > 1
+        ? (lines[lines.length - 1].baseline - lines[0].baseline) / (lines.length - 1)
+        : size * 1.2;
+      const kids = [];
+      lines.forEach((line, li) => {
+        const runs = PSExtract.lineRuns(line);
+        for (const node of docxInline(runs, o, size, li > 0 ? { break: 1 } : undefined)) kids.push(node);
+      });
+      // A substituted face runs a little wider or narrower than the original;
+      // the slack keeps a line from wrapping, and goes on the side the text
+      // does not hang from.
+      const slack = b.align === 'justify' ? 1 : size * 1.5;
+      const x = b.align === 'right' ? b.x - slack : b.align === 'center' ? b.x - slack / 2 : b.x;
+      children.push(new D.Paragraph({
+        frame: {
+          type: 'absolute',
+          position: { x: twip(Math.max(0, x)), y: twip(Math.max(0, lines[0].baseline - pitch * 0.8)) },
+          width: twip(b.w + slack),
+          height: twip(pitch * lines.length + size * 0.3),
+          anchor: { horizontal: D.FrameAnchorType.PAGE, vertical: D.FrameAnchorType.PAGE },
+          wrap: 'none'
+        },
+        alignment: docxAlignment(b.align),
+        spacing: { before: 0, after: 0, line: twip(Math.max(pitch, size)), lineRule: D.LineRuleType.EXACT },
+        children: kids
+      }));
+    }
+
+    if (!children.length) {
+      const img = pageImages && pageImages[pi];
+      children.push(img
+        ? docxPicture({ data: img.data, type: img.type, width: page.width, height: page.height }, page.width)
+        : new D.Paragraph({ children: [] }));
+    }
+    return {
+      properties: {
+        type: pi === 0 ? undefined : D.SectionType.NEXT_PAGE,
+        page: {
+          size: {
+            width: twip(page.width),
+            height: twip(page.height),
+            orientation: page.width > page.height
+              ? D.PageOrientation.LANDSCAPE
+              : D.PageOrientation.PORTRAIT
+          },
+          margin: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0, gutter: 0 }
+        }
+      },
+      children
+    };
+  });
+}
+
+/** The margins the text was set inside, for the pages of a reflowed document. */
+function flowMargins(doc) {
+  const lefts = [], rights = [];
+  for (const p of doc.pages) {
+    if (!p.paragraphs.length || !p.frame) continue;
+    lefts.push(p.frame.x0);
+    rights.push(p.width - p.frame.x1);
+  }
+  const mid = (v, fallback) => {
+    if (!v.length) return fallback;
+    v.sort((a, b) => a - b);
+    return Math.min(108, Math.max(36, v[Math.floor(v.length / 2)]));
+  };
+  return { left: mid(lefts, 60), right: mid(rights, 60) };
+}
+
+/**
+ * PDF -> .docx
+ *
+ * mode 'flow'   — reflowable paragraphs, headings, lists, tables and
+ *                 pictures, in reading order. Best for editing; the page
+ *                 layout itself is not preserved.
+ * mode 'layout' — every paragraph and table cell becomes a box placed where
+ *                 it sat, so the page looks close to the original but is
+ *                 awkward to restructure.
+ */
+async function toDocx(pdf, opts) {
+  const o = Object.assign({ mode: 'flow', tables: true, background: false, dpi: 110 }, opts);
+  const onProgress = progressFn(o);
+  const indexes = pageIndexes(pdf, o);
+  onProgress(0, indexes.length + 1, 'Reading text');
+  const doc = await readDocument(pdf, o, { detectTables: o.tables !== false });
+  const warnings = warningsForDocument(doc, 'A picture of each was used instead.');
+  const layout = o.mode === 'layout';
+
+  let backgrounds = null;
+  if (layout && o.background) {
+    onProgress(indexes.length, indexes.length + 1, 'Drawing the pages');
+    backgrounds = await renderPagePictures(pdf, indexes, {
+      dpi: Math.max(o.dpi, 130), type: 'image/jpeg', quality: 0.88, noText: true
+    }, () => true);
+  }
+  const pictures = backgrounds ? new Map() : await renderPictures(pdf, doc, o);
+
+  // Pages that carry no text at all used to come out as an empty Word page
+  // with no explanation.
+  let pageImages = null;
+  if (o.imageFallback !== false) {
+    const empty = doc.pages.map((p) => !pageHasContent(p));
+    if (empty.some(Boolean)) {
+      pageImages = await renderPagePictures(pdf, indexes, { dpi: o.dpi }, (n) => empty[n]);
+    }
+  }
+
+  const D = docx;
+  const first = doc.pages[0] || { width: 595, height: 842 };
+  let sections;
+  if (layout) {
+    sections = docxLayoutSections(doc, o, backgrounds, pictures, pageImages);
+  } else {
+    const margins = flowMargins(doc);
+    o.availWidth = first.width - margins.left - margins.right;
+    sections = [{
+      properties: {
+        page: {
+          size: {
+            width: twip(first.width),
+            height: twip(first.height),
+            orientation: first.width > first.height
+              ? D.PageOrientation.LANDSCAPE
+              : D.PageOrientation.PORTRAIT
+          },
+          margin: { top: twip(54), bottom: twip(54), left: twip(margins.left), right: twip(margins.right) }
+        }
+      },
+      children: docxFlowChildren(flowOf(doc, o), o, pictures, pageImages)
+    }];
+  }
+
+  const body = Math.round((doc.bodySize || 11) * 2);
+  const document = new D.Document({
+    creator: 'PDF Studio',
+    title: o.title || baseName(o.filename),
+    description: 'Converted from PDF by PDF Studio',
+    styles: { default: { document: { run: { size: body, font: 'Arial' } } } },
+    sections
+  });
+  onProgress(indexes.length + 1, indexes.length + 1, 'Writing document');
+  const blob = await D.Packer.toBlob(document);
+  return { blob, filename: baseName(o.filename) + '.docx', warnings };
+}
+
+/* ------------------------------------------------------------------ *
+ * PDF -> Excel
+ * ------------------------------------------------------------------ */
+
+const BENGALI_DIGITS = /[০-৯]/g;
+
+/**
+ * Read a cell as a number, if it is unmistakably one.
+ *
+ * Returns { v, z } — the value and a number format that shows it the way it
+ * was printed — or null when the text should stay text. It is deliberately
+ * hard to please: a part number with a leading zero, a telephone number and a
+ * figure too long to hold exactly all stay as they are, because turning
+ * "00123" into 123 loses something nobody can put back.
+ */
+function parseNumber(text) {
+  let s = String(text == null ? '' : text).trim()
+    .replace(BENGALI_DIGITS, (d) => String(d.charCodeAt(0) - 0x09E6))
+    .replace(/[   ]/g, ' ');
+  if (!s || !/\d/.test(s)) return null;
+  let negative = false;
+  let percent = false;
+  let currency = '';
+  if (/^\(.+\)$/.test(s)) { negative = true; s = s.slice(1, -1).trim(); }
+  if (/^[-−–]/.test(s)) { negative = !negative; s = s.slice(1).trim(); }
+  const cur = /^([$€£¥৳₹])\s*/.exec(s);
+  if (cur) { currency = cur[1]; s = s.slice(cur[0].length); }
+  if (/^[-−–]/.test(s)) { negative = !negative; s = s.slice(1).trim(); }
+  if (/%$/.test(s)) { percent = true; s = s.slice(0, -1).trim(); }
+
+  let digits = null;
+  let grouped = false;
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s) || /^\d{1,2}(,\d{2})+,\d{3}(\.\d+)?$/.test(s)) {
+    digits = s.replace(/,/g, '');             // 1,234,567.89 and 12,34,567.89
+    grouped = true;
+  } else if (/^\d{1,3}(\.\d{3})+,\d+$/.test(s)) {
+    digits = s.replace(/\./g, '').replace(',', '.');   // 1.234.567,89
+    grouped = true;
+  } else if (/^\d{1,3}( \d{3})+([.,]\d+)?$/.test(s)) {
+    digits = s.replace(/ /g, '').replace(',', '.');    // 1 234 567,89
+    grouped = true;
+  } else if (/^\d+(\.\d+)?$/.test(s)) {
+    if (/^0\d/.test(s)) return null;                    // 007, 00123
+    digits = s;
+  } else if (/^\d+,\d{1,2}$/.test(s)) {
+    if (/^0\d/.test(s)) return null;
+    digits = s.replace(',', '.');                       // 12,50
+  } else {
+    return null;
+  }
+  const whole = digits.split('.')[0];
+  if (whole.length > 15) return null;
+  let v = Number(digits);
+  if (!isFinite(v)) return null;
+  const decimals = (digits.split('.')[1] || '').length;
+  const frac = decimals ? '.' + '0'.repeat(Math.min(decimals, 8)) : '';
+  let z = (grouped || currency ? '#,##0' : '0') + frac;
+  if (percent) { v = v / 100; z = '0' + frac + '%'; }
+  if (currency) z = '"' + currency + '"' + z;
+  if (negative) v = -v;
+  if (!percent && !currency && !grouped && !decimals) z = null;   // a plain whole number
+  return { v, z };
+}
+
+function sheetCell(text, numbers) {
+  const s = String(text == null ? '' : text);
+  if (numbers) {
+    const n = parseNumber(s);
+    if (n) return n.z ? { t: 'n', v: n.v, z: n.z } : n.v;
+  }
+  return s;
+}
+
+/**
+ * PDF -> .xlsx
+ *
+ * mode 'tables' — one sheet per page holding the detected tables.
+ * mode 'lines'  — one sheet per page, one row per text line.
+ * mode 'single' — every page appended to a single sheet.
+ */
+async function toXlsx(pdf, opts) {
+  const o = Object.assign({ mode: 'tables', numbers: true, sheetPerPage: true }, opts);
+  const doc = await readDocument(pdf, o, { detectTables: o.mode !== 'lines' });
+
+  const wb = XLSX.utils.book_new();
+  const usedNames = new Set();
+  const sheetName = (want) => {
+    let name = String(want).replace(/[\\/?*[\]:]/g, ' ').slice(0, 28) || 'Sheet';
+    let i = 2;
+    while (usedNames.has(name)) name = (String(want).slice(0, 24) + ' ' + i++).trim();
+    usedNames.add(name);
+    return name;
+  };
+
+  // The rows of a page, and the cells its merged cells cover.
+  const pageRows = (page) => {
+    const rows = [];
+    const merges = [];
+    if (page.tables && page.tables.length) {
+      page.tables.forEach((table, ti) => {
+        if (ti > 0) rows.push([]);
+        const base = rows.length;
+        table.cells.forEach((row) => {
+          rows.push(row.map((cell) => (cell ? sheetCell(cell.text, o.numbers) : '')));
+          for (const cell of row) {
+            if (cell && (cell.rowspan > 1 || cell.colspan > 1)) {
+              merges.push({
+                s: { r: base + cell.row, c: cell.col },
+                e: { r: base + cell.row + cell.rowspan - 1, c: cell.col + cell.colspan - 1 }
+              });
+            }
+          }
+        });
+      });
+    } else {
+      for (const row of PSExtract.pageToGrid(page)) rows.push(row.map((c) => sheetCell(c, o.numbers)));
+    }
+    return { rows, merges };
+  };
+
+  const finishSheet = (rows, merges) => {
+    const ws = XLSX.utils.aoa_to_sheet(rows.length ? rows : [['']]);
+    const widths = [];
+    for (const row of rows) {
+      row.forEach((cell, c) => {
+        const shown = cell && typeof cell === 'object' ? String(cell.v) : String(cell == null ? '' : cell);
+        widths[c] = Math.min(60, Math.max(widths[c] || 8, shown.length + 2));
+      });
+    }
+    ws['!cols'] = widths.map((w) => ({ wch: w || 8 }));
+    if (merges.length) ws['!merges'] = merges;
+    return ws;
+  };
+
+  if (o.mode === 'single' || !o.sheetPerPage) {
+    const all = [];
+    const merges = [];
+    for (const page of doc.pages) {
+      if (doc.pages.length > 1) all.push(['Page ' + page.number]);
+      const part = pageRows(page);
+      for (const m of part.merges) {
+        merges.push({ s: { r: m.s.r + all.length, c: m.s.c }, e: { r: m.e.r + all.length, c: m.e.c } });
+      }
+      for (const row of part.rows) all.push(row);
+      all.push([]);
+    }
+    XLSX.utils.book_append_sheet(wb, finishSheet(all, merges), sheetName('Document'));
+  } else {
+    for (const page of doc.pages) {
+      const part = pageRows(page);
+      XLSX.utils.book_append_sheet(wb, finishSheet(part.rows, part.merges), sheetName('Page ' + page.number));
+    }
+  }
+
+  if (!wb.SheetNames.length) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['']]), 'Sheet1');
+  }
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true });
+  return {
+    blob: new Blob([out], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    }),
+    filename: baseName(o.filename) + '.xlsx',
+    warnings: warningsForDocument(doc)
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * PDF -> PowerPoint
+ * ------------------------------------------------------------------ */
+
 /**
  * PDF -> .pptx, one slide per page.
  *
  * mode 'image'   — the page as a full-bleed picture. Pixel-perfect, not editable.
  * mode 'text'    — text boxes only, on a blank slide. Fully editable.
- * mode 'overlay' — the picture behind editable text boxes (the default).
+ * mode 'overlay' — a picture of everything on the page except its text, with
+ *                  the text on top as real, editable boxes (the default).
  */
 async function toPptx(pdf, opts) {
   const o = Object.assign(
@@ -584,6 +990,8 @@ async function toPptx(pdf, opts) {
 
   const wantText = o.mode !== 'image';
   const wantImage = o.mode !== 'text';
+  const hook = wantText ? ocrHook(o) : null;
+  const recognised = [];
 
   for (let n = 0; n < indexes.length; n++) {
     const idx = indexes[n];
@@ -598,54 +1006,92 @@ async function toPptx(pdf, opts) {
     const offX = (slideW - drawW) / 2;
     const offY = (slideH - drawH) / 2;
 
+    let data = null;
+    if (wantText) {
+      data = await PSExtract.extractPage(page, idx, { detectTables: true });
+      if ((data.isEmpty || data.scanLike) && hook) {
+        const read = await hook(page, data);
+        if (read) { data = read; recognised.push(idx + 1); }
+      }
+    }
+    // Text read off a scan cannot be taken out of the picture it was read
+    // from, so on those pages it is laid over the picture unseen.
+    const scan = !!(data && data.ocr);
+    const blocks = data ? PSExtract.textBlocks(data).filter((b) => b.text.trim()) : [];
+
     if (wantImage) {
-      const canvas = await PSExtract.renderPageToCanvas(page, o.dpi, '#ffffff');
+      const canvas = await PSExtract.renderPageToCanvas(page, o.dpi, '#ffffff', {
+        noText: o.mode === 'overlay' && blocks.length > 0 && !scan,
+        factory: pdf.psCanvasFactory
+      });
       slide.addImage({
         data: canvasDataUrl(canvas, o.imageFormat, o.quality),
         x: offX, y: offY, w: drawW, h: drawH
       });
+      PSExtract.releaseCanvas(canvas);
     } else {
       slide.background = { color: 'FFFFFF' };
     }
 
-    if (wantText) {
-      let data = await PSExtract.extractPage(page, idx, { detectTables: false });
-      if (data.isEmpty) {
-        const hook = ocrHook(o);
-        if (hook) data = (await hook(page, data)) || data;
-      }
-      const source = o.mode === 'overlay' ? data.lines : data.paragraphs;
-      for (const block of source) {
-        const text = (block.text || '').replace(/\t/g, '  ').trim();
-        if (!text) continue;
-        const w = Math.max(block.w || 0, block.size * 2) / PT_PER_INCH * fit;
-        slide.addText(text, {
-          x: offX + (block.x / PT_PER_INCH) * fit,
-          y: offY + (block.y / PT_PER_INCH) * fit,
-          w: Math.min(w + 0.12, slideW),
-          h: Math.max((block.h || block.size * 1.3) / PT_PER_INCH * fit, 0.16),
-          fontSize: Math.max(6, Math.round(block.size * fit)),
-          bold: !!block.bold,
-          italic: !!block.italic,
-          color: hexFromColor(o.textColor || (isHexColor(block.color) ? block.color : '000000')),
-          align: block.align === 'center' ? 'center' : block.align === 'right' ? 'right' : 'left',
-          valign: 'top',
-          margin: 0,
-          isTextBox: true,
-          transparency: o.mode === 'overlay' && o.hideOverlayText ? 100 : 0,
-          fit: 'none',
-          wrap: o.mode !== 'overlay'
+    for (const b of blocks) {
+      const hidden = wantImage && (scan || b.invisible);
+      const lines = b.lines;
+      const size = b.size;
+      const pitch = lines.length > 1
+        ? (lines[lines.length - 1].baseline - lines[0].baseline) / (lines.length - 1)
+        : size * 1.2;
+      const parts = [];
+      lines.forEach((line, li) => {
+        const runs = PSExtract.lineRuns(line);
+        runs.forEach((run, k) => {
+          const link = safeLink(run.link);
+          parts.push({
+            text: run.text,
+            options: {
+              fontSize: Math.max(5, Math.round(run.size * fit * 10) / 10),
+              fontFace: run.face || 'Arial',
+              bold: !!run.bold,
+              italic: !!run.italic,
+              color: hexFromColor(o.textColor || (isHexColor(run.color) ? run.color : '000000')),
+              superscript: run.script === 'sup' || undefined,
+              subscript: run.script === 'sub' || undefined,
+              hyperlink: link ? { url: link } : undefined,
+              breakLine: k === runs.length - 1 && li < lines.length - 1
+            }
+          });
         });
-      }
+      });
+      if (!parts.length) continue;
+      const slack = size * 1.5;
+      const x = b.align === 'right' ? b.x - slack : b.align === 'center' ? b.x - slack / 2 : b.x;
+      slide.addText(parts, {
+        x: offX + (Math.max(0, x) / PT_PER_INCH) * fit,
+        y: offY + (Math.max(0, lines[0].baseline - pitch * 0.8) / PT_PER_INCH) * fit,
+        w: Math.min(((b.w + slack) / PT_PER_INCH) * fit, slideW),
+        h: Math.max(((pitch * lines.length + size * 0.3) / PT_PER_INCH) * fit, 0.16),
+        align: b.align === 'center' ? 'center' : b.align === 'right' ? 'right' : 'left',
+        valign: 'top',
+        margin: 0,
+        lineSpacing: Math.max(pitch, size) * fit,
+        isTextBox: true,
+        transparency: hidden ? 100 : 0,
+        fit: 'none',
+        wrap: false
+      });
     }
 
     page.cleanup();
     onProgress(n + 1, indexes.length, 'Slide ' + (n + 1) + ' of ' + indexes.length);
-    await new Promise((r) => setTimeout(r, 0));
+    await PSExtract.tick();
   }
 
   const blob = await pptx.write({ outputType: 'blob' });
-  return { blob, filename: baseName(o.filename) + '.pptx' };
+  const warnings = [];
+  if (recognised.length) {
+    warnings.push(capitalise(describePages(recognised)) + (recognised.length === 1 ? ' was' : ' were') +
+      ' read by OCR — check the words against the original before relying on them.');
+  }
+  return { blob, filename: baseName(o.filename) + '.pptx', warnings };
 }
 
 /* ------------------------------------------------------------------ *
@@ -665,7 +1111,7 @@ async function toImages(pdf, opts) {
     results.push({ name: baseName(o.filename) + '-page-' + String(indexes[n] + 1).padStart(3, '0') + '.' + ext, blob });
     page.cleanup();
     onProgress(n + 1, indexes.length, 'Page ' + (n + 1) + ' of ' + indexes.length);
-    await new Promise((r) => setTimeout(r, 0));
+    await PSExtract.tick();
   }
 
   const wantZip = o.zip === true || (o.zip === 'auto' && results.length > 1);
@@ -691,7 +1137,8 @@ async function extractImagesZip(pdf, opts) {
       images = await PSExtract.extractPageImages(page, o.minPixels);
     } catch (e) { /* a page whose images will not decode simply yields none */ }
     for (let k = 0; k < images.length; k++) {
-      const blob = await blobFromCanvas(images[k].canvas, 'image/png');
+      const blob = await PSExtract.canvasToBlob(images[k].canvas, 'image/png');
+      PSExtract.releaseCanvas(images[k].canvas);
       zip.file(
         'page-' + String(indexes[n] + 1).padStart(3, '0') + '-image-' + (k + 1) + '.png',
         blob
@@ -700,10 +1147,11 @@ async function extractImagesZip(pdf, opts) {
     }
     page.cleanup();
     onProgress(n + 1, indexes.length, 'Page ' + (n + 1) + ' — ' + count + ' image(s) found');
-    await new Promise((r) => setTimeout(r, 0));
+    await PSExtract.tick();
   }
   if (!count) throw new Error('No embedded images were found in the selected pages.');
-  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  // PNG is already compressed; deflating it again buys nothing and costs time.
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
   return { blob, filename: baseName(o.filename) + '-images.zip', count };
 }
 
@@ -713,11 +1161,7 @@ async function extractImagesZip(pdf, opts) {
 
 async function toPlainText(pdf, opts) {
   const o = Object.assign({ layout: false }, opts);
-  const doc = await PSExtract.extractDocument(pdf, {
-    pages: pageIndexes(pdf, o),
-    onProgress: (i, n) => progressFn(o)(i, n, 'Reading page ' + i + ' of ' + n),
-    onEmptyPage: ocrHook(o)
-  });
+  const doc = await readDocument(pdf, o);
   return {
     blob: textBlob(PSExtract.documentToText(doc, o), 'text/plain'),
     filename: baseName(o.filename) + '.txt',
@@ -725,38 +1169,84 @@ async function toPlainText(pdf, opts) {
   };
 }
 
-function htmlForFlow(doc, title) {
-  const parts = [];
-  for (const page of doc.pages) {
-    parts.push('<section class="page" id="page-' + page.number + '">');
-    parts.push('<div class="page-label">Page ' + page.number + '</div>');
-    if (page.table) {
-      parts.push('<table>');
-      page.table.rows.forEach((row, ri) => {
-        const tag = ri === 0 ? 'th' : 'td';
-        parts.push('<tr>' + row.map((c) => '<' + tag + '>' + escapeHtml(c) + '</' + tag + '>').join('') + '</tr>');
-      });
-      parts.push('</table>');
-    }
-    let inList = false;
-    const sourceLines = page.table ? page.table.sourceLines : null;
-    for (const p of page.paragraphs) {
-      if (!p.text.trim()) continue;
-      // The table above already carries these lines; repeating them as prose
-      // printed the same content twice.
-      if (paragraphInTable(p, sourceLines)) continue;
-      if (p.bullet && !inList) { parts.push('<ul>'); inList = true; }
-      if (!p.bullet && inList) { parts.push('</ul>'); inList = false; }
-      const decls = [p.align !== 'left' ? 'text-align:' + p.align : '', cssColor(p.color)]
-        .filter(Boolean).join(';');
-      const style = decls ? ' style="' + decls + '"' : '';
-      if (p.bullet) parts.push('<li' + style + '>' + escapeHtml(p.text) + '</li>');
-      else if (p.heading) parts.push('<h' + p.heading + style + '>' + escapeHtml(p.text) + '</h' + p.heading + '>');
-      else parts.push('<p' + style + '>' + escapeHtml(p.text) + '</p>');
-    }
-    if (inList) parts.push('</ul>');
-    parts.push('</section>');
+const CSS_FACES = { serif: 'Georgia,"Times New Roman",serif', mono: 'ui-monospace,Consolas,"Courier New",monospace' };
+
+function htmlRuns(runs, base) {
+  let out = '';
+  for (const run of runs) {
+    let text = escapeHtml(run.text);
+    if (run.mono && !(base && base.mono)) text = '<code>' + text + '</code>';
+    if (run.script === 'sup') text = '<sup>' + text + '</sup>';
+    else if (run.script === 'sub') text = '<sub>' + text + '</sub>';
+    if (run.bold && !(base && base.bold)) text = '<strong>' + text + '</strong>';
+    if (run.italic && !(base && base.italic)) text = '<em>' + text + '</em>';
+    if (run.underline && !run.link) text = '<u>' + text + '</u>';
+    const colour = base && run.color !== base.color ? cssColor(run.color) : '';
+    if (colour) text = '<span style="' + colour + '">' + text + '</span>';
+    const link = safeLink(run.link);
+    if (link) text = '<a href="' + escapeHtml(link) + '">' + text + '</a>';
+    out += text;
   }
+  return out;
+}
+
+function htmlTable(table) {
+  const parts = ['<table' + (table.ruled ? '' : ' class="plain"') + '>'];
+  table.cells.forEach((row, r) => {
+    const tag = r < table.header ? 'th' : 'td';
+    parts.push('<tr>' + row.filter(Boolean).map((cell) => {
+      const attrs = (cell.colspan > 1 ? ' colspan="' + cell.colspan + '"' : '') +
+        (cell.rowspan > 1 ? ' rowspan="' + cell.rowspan + '"' : '') +
+        (cell.align !== 'left' ? ' style="text-align:' + cell.align + '"' : '');
+      return '<' + tag + attrs + '>' + htmlRuns(PSExtract.buildRuns(cell.lines), { bold: tag === 'th' }) + '</' + tag + '>';
+    }).join('') + '</tr>');
+  });
+  parts.push('</table>');
+  return parts.join('\n');
+}
+
+function htmlForFlow(doc, title, o, pictures) {
+  const parts = ['<article>'];
+  let list = null;      // 'ul' | 'ol' while a list is open
+  const closeList = () => { if (list) { parts.push('</' + list + '>'); list = null; } };
+  for (const entry of flowOf(doc, o)) {
+    if (entry.type === 'paragraph') {
+      const p = entry.para;
+      const decls = [
+        p.align !== 'left' && !p.bullet ? 'text-align:' + p.align : '',
+        cssColor(p.color),
+        p.bullet && p.listLevel ? 'margin-left:' + (p.listLevel * 1.5) + 'em' : '',
+        p.mono ? 'font-family:' + CSS_FACES.mono : ''
+      ].filter(Boolean).join(';');
+      const style = decls ? ' style="' + decls + '"' : '';
+      const inner = htmlRuns(entry.runs, p);
+      if (p.bullet) {
+        const want = p.ordered ? 'ol' : 'ul';
+        if (list !== want) { closeList(); parts.push('<' + want + '>'); list = want; }
+        const value = p.ordered && /^\(?(\d+)/.test(p.marker) ? ' value="' + RegExp.$1 + '"' : '';
+        parts.push('<li' + value + style + '>' + inner + '</li>');
+        continue;
+      }
+      closeList();
+      if (p.heading) parts.push('<h' + p.heading + style + '>' + inner + '</h' + p.heading + '>');
+      else parts.push('<p' + style + '>' + inner + '</p>');
+    } else {
+      closeList();
+      if (entry.type === 'table') {
+        parts.push(htmlTable(entry.table));
+      } else if (entry.type === 'image') {
+        const pic = pictures.get(entry.image);
+        if (pic && pic.url) {
+          parts.push('<figure><img src="' + pic.url + '" width="' + Math.round(pic.width * PX_PER_PT) +
+            '" alt=""></figure>');
+        }
+      } else if (entry.type === 'break') {
+        parts.push('<hr class="page">');
+      }
+    }
+  }
+  closeList();
+  parts.push('</article>');
   return wrapHtml(title, FLOW_CSS, parts.join('\n'));
 }
 
@@ -764,21 +1254,27 @@ function htmlForExact(doc, title, backgrounds) {
   const parts = [];
   doc.pages.forEach((page, pi) => {
     parts.push('<section class="page" style="width:' + page.width + 'pt;height:' + page.height + 'pt">');
-    if (backgrounds && backgrounds[pi]) {
-      parts.push('<img class="bg" src="' + backgrounds[pi] + '" alt="">');
-    }
+    const bg = backgrounds && backgrounds[pi];
+    if (bg) parts.push('<img class="bg" src="' + bg + '" alt="">');
     for (const line of page.lines) {
       if (!line.text.trim()) continue;
-      const style = [
-        'left:' + line.x.toFixed(2) + 'pt',
-        'top:' + line.y.toFixed(2) + 'pt',
-        'font-size:' + line.size.toFixed(2) + 'pt',
-        line.bold ? 'font-weight:700' : '',
-        line.italic ? 'font-style:italic' : '',
-        line.mono ? 'font-family:ui-monospace,Consolas,monospace' : '',
-        cssColor(line.color)
-      ].filter(Boolean).join(';');
-      parts.push('<span style="' + style + '">' + escapeHtml(line.text.replace(/\t/g, '  ')) + '</span>');
+      // Each piece is placed on its own, so text that stood apart on the line
+      // stays apart instead of being run together behind two spaces.
+      for (const seg of line.segments) {
+        const lead = seg.items[0] || line;
+        const face = lead.mono ? CSS_FACES.mono : lead.serif ? CSS_FACES.serif : '';
+        const style = [
+          'left:' + seg.x.toFixed(2) + 'pt',
+          'top:' + (line.baseline - line.size * 0.9).toFixed(2) + 'pt',
+          'font-size:' + line.size.toFixed(2) + 'pt',
+          lead.bold ? 'font-weight:700' : '',
+          lead.italic ? 'font-style:italic' : '',
+          face ? 'font-family:' + face : '',
+          // The words of a scan's hidden layer stay hidden, and selectable.
+          line.invisible && bg ? 'color:transparent' : cssColor(lead.color || line.color)
+        ].filter(Boolean).join(';');
+        parts.push('<span style="' + style + '">' + escapeHtml(seg.text) + '</span>');
+      }
     }
     parts.push('</section>');
   });
@@ -789,15 +1285,20 @@ const FLOW_CSS = `
 :root { color-scheme: light dark; }
 body { margin:0; padding:2rem 1rem; font:16px/1.6 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif;
        background:#f6f7f9; color:#15181f; }
-@media (prefers-color-scheme: dark) { body { background:#14161b; color:#e7e9ee; } .page { background:#1c1f26 !important; } }
-.page { max-width:52rem; margin:0 auto 2rem; background:#fff; padding:2.5rem 3rem; border-radius:10px;
-        box-shadow:0 1px 3px rgba(0,0,0,.12); }
-.page-label { font-size:.75rem; letter-spacing:.08em; text-transform:uppercase; opacity:.45; margin-bottom:1.2rem; }
-h1,h2,h3,h4 { line-height:1.25; margin:1.4em 0 .5em; }
+@media (prefers-color-scheme: dark) { body { background:#14161b; color:#e7e9ee; } article { background:#1c1f26 !important; } }
+article { max-width:52rem; margin:0 auto 2rem; background:#fff; padding:2.5rem 3rem; border-radius:10px;
+          box-shadow:0 1px 3px rgba(0,0,0,.12); }
+h1,h2,h3,h4,h5,h6 { line-height:1.25; margin:1.4em 0 .5em; }
 p { margin:0 0 .8em; }
-table { border-collapse:collapse; width:100%; margin:1em 0; font-size:.92em; }
+li { margin:.2em 0; }
+code { font:.92em ui-monospace,Consolas,monospace; }
+figure { margin:1.2em 0; text-align:center; }
+figure img { max-width:100%; height:auto; }
+hr.page { border:0; border-top:1px dashed rgba(128,128,128,.4); margin:2em 0; }
+table { border-collapse:collapse; margin:1em 0; font-size:.92em; }
 th,td { border:1px solid rgba(128,128,128,.35); padding:.4em .6em; text-align:left; vertical-align:top; }
 th { background:rgba(128,128,128,.12); font-weight:600; }
+table.plain th, table.plain td { border-color:transparent; border-bottom-color:rgba(128,128,128,.18); }
 `;
 
 const EXACT_CSS = `
@@ -820,62 +1321,92 @@ function wrapHtml(title, css, body) {
 async function toHtml(pdf, opts) {
   const o = Object.assign({ mode: 'flow', background: false, dpi: 110 }, opts);
   const indexes = pageIndexes(pdf, o);
-  const doc = await PSExtract.extractDocument(pdf, {
-    pages: indexes,
-    onProgress: (i, n) => progressFn(o)(i, n, 'Reading page ' + i + ' of ' + n),
-    onEmptyPage: ocrHook(o)
-  });
-  let backgrounds = null;
-  if (o.mode === 'exact' && o.background) {
-    backgrounds = [];
-    for (const idx of indexes) {
-      const page = await pdf.getPage(idx + 1);
-      const canvas = await PSExtract.renderPageToCanvas(page, o.dpi, '#ffffff');
-      backgrounds.push(canvasDataUrl(canvas, 'jpeg', 0.7));
-      page.cleanup();
-    }
-  }
+  const doc = await readDocument(pdf, o);
   const title = baseName(o.filename);
-  const html = o.mode === 'exact'
-    ? htmlForExact(doc, title, backgrounds)
-    : htmlForFlow(doc, title);
+  let html;
+  if (o.mode === 'exact') {
+    let backgrounds = null;
+    if (o.background && canRender()) {
+      backgrounds = [];
+      for (const idx of indexes) {
+        const page = await pdf.getPage(idx + 1);
+        const canvas = await PSExtract.renderPageToCanvas(page, o.dpi, '#ffffff', {
+          noText: true, factory: pdf.psCanvasFactory
+        });
+        backgrounds.push(canvasDataUrl(canvas, 'jpeg', 0.78));
+        PSExtract.releaseCanvas(canvas);
+        page.cleanup();
+        await PSExtract.tick();
+      }
+    }
+    html = htmlForExact(doc, title, backgrounds);
+  } else {
+    const pictures = await renderPictures(pdf, doc, Object.assign({}, o, { urls: true, dpi: 144 }));
+    html = htmlForFlow(doc, title, o, pictures);
+  }
   return { blob: textBlob(html, 'text/html'), filename: title + '.html', warnings: warningsForDocument(doc) };
 }
 
+/* Only what would otherwise be read as markup is escaped: a full stop or a
+   bracket in ordinary prose is left alone. */
 function mdEscape(s) {
-  return String(s).replace(/([\\`*_{}[\]()#+\-.!|])/g, '\\$1');
+  return String(s).replace(/([\\`*_[\]<>])/g, '\\$1');
+}
+
+function mdRuns(runs, base) {
+  let out = '';
+  for (const run of runs) {
+    const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(run.text);
+    let text = m[2];
+    if (!text) { out += run.text; continue; }
+    if (run.mono && !(base && base.mono)) text = '`' + text.replace(/`/g, '\'') + '`';
+    else text = mdEscape(text);
+    if (run.bold && run.italic && !(base && base.heading)) text = '***' + text + '***';
+    else if (run.bold && !(base && (base.heading || base.bold))) text = '**' + text + '**';
+    else if (run.italic && !(base && base.italic)) text = '*' + text + '*';
+    const link = safeLink(run.link);
+    if (link) text = '[' + text + '](' + link.replace(/[()]/g, encodeURIComponent) + ')';
+    out += m[1] + text + m[3];
+  }
+  return out;
+}
+
+function mdTable(table) {
+  const cell = (c) => (c ? mdEscape(c.text).replace(/\|/g, '\\|') : '');
+  // A pipe table has no merged cells; a merged cell's text sits in its first.
+  const grid = table.cells.map((row) => row.map(cell));
+  const rule = table.aligns.map((a) => (a === 'right' ? ' ---: ' : a === 'center' ? ' :---: ' : ' --- '));
+  const out = ['| ' + grid[0].join(' | ') + ' |', '|' + rule.join('|') + '|'];
+  for (let r = 1; r < grid.length; r++) out.push('| ' + grid[r].join(' | ') + ' |');
+  return out.join('\n');
 }
 
 async function toMarkdown(pdf, opts) {
   const o = Object.assign({ tables: true, pageBreaks: true }, opts);
-  const doc = await PSExtract.extractDocument(pdf, {
-    pages: pageIndexes(pdf, o),
-    onProgress: (i, n) => progressFn(o)(i, n, 'Reading page ' + i + ' of ' + n),
-    onEmptyPage: ocrHook(o)
-  });
+  const doc = await readDocument(pdf, o, { detectTables: o.tables !== false });
   const out = [];
-  doc.pages.forEach((page, pi) => {
-    if (pi > 0 && o.pageBreaks) out.push('\n---\n');
-    if (o.tables && page.table) {
-      const rows = page.table.rows;
-      out.push('| ' + rows[0].map(mdEscape).join(' | ') + ' |');
-      out.push('|' + rows[0].map(() => ' --- ').join('|') + '|');
-      for (let r = 1; r < rows.length; r++) {
-        out.push('| ' + rows[r].map(mdEscape).join(' | ') + ' |');
+  let inList = false;
+  for (const entry of flowOf(doc, o)) {
+    if (entry.type === 'paragraph') {
+      const p = entry.para;
+      const text = mdRuns(entry.runs, p);
+      if (p.bullet) {
+        out.push('  '.repeat(p.listLevel || 0) + (p.ordered ? p.marker.replace(/^\(|\)$/g, '').replace(/\.?$/, '.') : '-') + ' ' + text);
+        inList = true;
+        continue;
       }
+      if (inList) { out.push(''); inList = false; }
+      if (p.heading) out.push('#'.repeat(Math.min(6, p.heading)) + ' ' + text);
+      else out.push(text.replace(/^(#{1,6} |[-+>] |\d+[.)] )/, '\\$1'));
       out.push('');
-      return;
+    } else {
+      if (inList) { out.push(''); inList = false; }
+      if (entry.type === 'table') { out.push(mdTable(entry.table)); out.push(''); }
+      else if (entry.type === 'break') { out.push('---'); out.push(''); }
     }
-    for (const p of page.paragraphs) {
-      if (!p.text.trim()) continue;
-      if (p.heading) out.push('#'.repeat(Math.min(6, p.heading)) + ' ' + p.text);
-      else if (p.bullet) out.push('- ' + p.text);
-      else out.push(p.text);
-      out.push('');
-    }
-  });
+  }
   return {
-    blob: textBlob(out.join('\n').replace(/\n{3,}/g, '\n\n'), 'text/markdown'),
+    blob: textBlob(out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n', 'text/markdown'),
     filename: baseName(o.filename) + '.md',
     warnings: warningsForDocument(doc)
   };
@@ -883,11 +1414,7 @@ async function toMarkdown(pdf, opts) {
 
 async function toCsv(pdf, opts) {
   const o = Object.assign({ delimiter: ',' }, opts);
-  const doc = await PSExtract.extractDocument(pdf, {
-    pages: pageIndexes(pdf, o),
-    onProgress: (i, n) => progressFn(o)(i, n, 'Reading page ' + i + ' of ' + n),
-    onEmptyPage: ocrHook(o)
-  });
+  const doc = await readDocument(pdf, o);
   const chunks = [];
   for (const page of doc.pages) {
     if (doc.pages.length > 1) chunks.push(csvCell('Page ' + page.number));
@@ -903,30 +1430,47 @@ async function toCsv(pdf, opts) {
 
 async function toJson(pdf, opts) {
   const o = Object.assign({ items: false, pretty: true }, opts);
-  const doc = await PSExtract.extractDocument(pdf, {
-    pages: pageIndexes(pdf, o),
-    onProgress: (i, n) => progressFn(o)(i, n, 'Reading page ' + i + ' of ' + n),
-    onEmptyPage: ocrHook(o)
+  const doc = await readDocument(pdf, o);
+  const round = (v) => Math.round(v * 100) / 100;
+  const paragraph = (q) => ({
+    text: q.text, x: round(q.x), y: round(q.y), w: round(q.w), h: round(q.h),
+    size: q.size, bold: q.bold, italic: q.italic, font: q.font,
+    heading: q.heading, bullet: q.bullet, ordered: q.ordered || false, marker: q.marker || null,
+    level: q.listLevel || 0, align: q.align, color: q.color,
+    artifact: q.artifact || null, continues: !!q.continues,
+    runs: q.runs.length > 1 ? q.runs.map((r) => ({
+      text: r.text, bold: r.bold, italic: r.italic, size: r.size, color: r.color,
+      script: r.script, link: r.link
+    })) : undefined
+  });
+  const tableOut = (t) => ({
+    x: round(t.x), y: round(t.y), w: round(t.w), h: round(t.h),
+    ruled: t.ruled, header: t.header, columns: t.columns.map(round), aligns: t.aligns, rows: t.rows,
+    spans: [].concat(...t.cells.map((row) => row.filter((c) => c && (c.rowspan > 1 || c.colspan > 1))
+      .map((c) => ({ row: c.row, col: c.col, rowspan: c.rowspan, colspan: c.colspan }))))
   });
   const payload = {
     source: o.filename || 'document.pdf',
     generator: 'PDF Studio',
     pageCount: doc.numPages,
+    bodySize: doc.bodySize,
     pages: doc.pages.map((p) => ({
       number: p.number,
       width: p.width,
       height: p.height,
       rotation: p.rotation,
-      bodySize: p.bodySize,
-      table: p.table ? { columns: p.table.columns, rows: p.table.rows } : null,
-      paragraphs: p.paragraphs.map((q) => ({
-        text: q.text, x: q.x, y: q.y, w: q.w, h: q.h,
-        size: q.size, bold: q.bold, italic: q.italic,
-        heading: q.heading, bullet: q.bullet, align: q.align, color: q.color
-      })),
+      ocr: !!p.ocr,
+      // In reading order: what a person would read, in the order they would.
+      blocks: p.blocks.map((b) => (b.type === 'paragraph'
+        ? Object.assign({ type: 'paragraph' }, paragraph(b.para))
+        : b.type === 'table'
+          ? Object.assign({ type: 'table' }, tableOut(b.table))
+          : { type: b.image.kind === 'figure' ? 'figure' : 'image',
+              x: round(b.image.x), y: round(b.image.y), w: round(b.image.w), h: round(b.image.h) })),
+      table: p.table ? { columns: p.table.columns.map(round), rows: p.table.rows } : null,
       lines: p.lines.map((l) => ({
-        text: l.text, x: l.x, y: l.y, w: l.w, h: l.h, size: l.size, bold: l.bold,
-        italic: l.italic, color: l.color, invisible: l.invisible
+        text: l.text, x: round(l.x), y: round(l.y), w: round(l.w), h: round(l.h), size: l.size,
+        bold: l.bold, italic: l.italic, color: l.color, invisible: l.invisible
       })),
       items: o.items ? p.items : undefined
     }))
@@ -1023,11 +1567,11 @@ async function imagesToPdf(files, opts) {
       height: dh
     });
     onProgress(i + 1, files.length, file.name);
-    await new Promise((r) => setTimeout(r, 0));
+    await PSExtract.tick();
   }
 
   if (!out.getPageCount()) throw new Error('No images could be read.');
-  const bytes = await out.save({ useObjectStreams: true });
+  const bytes = await out.save(SAVE_OPTIONS);
   return {
     blob: new Blob([bytes], { type: 'application/pdf' }),
     bytes,
@@ -1142,7 +1686,7 @@ async function typesetBlocks(blocks, opts) {
     }
   }
 
-  const bytes = await doc.save({ useObjectStreams: true });
+  const bytes = await doc.save(SAVE_OPTIONS);
   return { blob: new Blob([bytes], { type: 'application/pdf' }), bytes };
 }
 
@@ -1353,7 +1897,7 @@ async function spreadsheetToPdf(file, opts) {
   }
 
   if (!doc.getPageCount()) throw new Error('That spreadsheet has no readable rows.');
-  const bytes = await doc.save({ useObjectStreams: true });
+  const bytes = await doc.save(SAVE_OPTIONS);
   return {
     blob: new Blob([bytes], { type: 'application/pdf' }),
     bytes,
@@ -1386,6 +1930,8 @@ async function convertFromPdf(pdf, format, opts) {
 
 root.PSConvert = {
   convertFromPdf,
+  flowOf,
+  parseNumber,
   toDocx,
   toXlsx,
   toPptx,

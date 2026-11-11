@@ -11,9 +11,24 @@
  * `window.PS` is the surface ui.js builds the Workbench on.
  */
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('libs/pdf.worker.min.js');
+function assetUrl(path) {
+  return typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL
+    ? chrome.runtime.getURL(path)
+    : path;
+}
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = assetUrl('libs/pdf.worker.min.js');
 const { PDFDocument, StandardFonts, PDFName, PDFNumber, PDFString, PDFArray,
-        rgb, degrees, LineCapStyle } = PDFLib;
+        rgb, degrees, LineCapStyle, LineJoinStyle, BlendMode } = PDFLib;
+
+/*
+ * pdf-lib pauses on a timer while it reads and writes, to keep a page
+ * responsive. Chrome holds the timers of a background tab to one a second, so
+ * a large document takes minutes to save the moment the user looks away.
+ * Reading and writing in one go is quicker in front and immune behind.
+ */
+const PDF_LOAD = { ignoreEncryption: true, parseSpeed: PDFLib.ParseSpeeds.Fastest };
+const PDF_SAVE = { useObjectStreams: true, objectsPerTick: Infinity };
 
 /* ============================== helpers ============================== */
 
@@ -166,6 +181,9 @@ const sigUseLast = $('#sig-use-last');
 const stampModal = $('#stamp-modal');
 const pwModal = $('#pw-modal');
 const keysModal = $('#keys-modal');
+const askModal = $('#ask-modal');
+const btnUndo = $('#btn-undo');
+const btnRedo = $('#btn-redo');
 
 /* ============================== state ============================== */
 
@@ -179,13 +197,13 @@ const state = {
   zoom: 1,
   tool: 'select',
   objects: [],
-  undoStack: [],
   selection: null,
   place: null,        // { kind: 'image'|'sig'|'stamp', ... }
   sig: null,
   currentPage: 1,
+  dirty: false,       // something would be lost if the tab closed now
   pen: { size: 3, color: '#16213e' },
-  textDefaults: { size: 16, color: '#111318', bold: false, italic: false },
+  textDefaults: { size: 16, color: '#111318', bold: false, italic: false, family: 'sans' },
   highlight: { color: '#ffe14d', opacity: 0.38 },
   shape: { kind: 'rect', stroke: '#d92d20', width: 2, fill: '#ffffff', filled: false },
   pagePlan: null,     // staged organiser changes
@@ -259,13 +277,27 @@ function setTool(t) {
 
 function updateCtx() {
   const sel = state.selection;
-  ctxText.classList.toggle('hidden', !(state.tool === 'text' || (sel && sel.type === 'text')));
-  ctxPen.classList.toggle('hidden', state.tool !== 'draw');
-  ctxHighlight.classList.toggle('hidden', state.tool !== 'highlight');
-  ctxShape.classList.toggle('hidden', state.tool !== 'shape');
+  const kind = sel ? sel.type : '';
+  // The controls for a kind of mark show while its tool is in hand and while
+  // one of its marks is selected — so a shape's colour can be changed after
+  // it has been drawn, not only before.
+  ctxText.classList.toggle('hidden', !(state.tool === 'text' || kind === 'text'));
+  ctxPen.classList.toggle('hidden', !(state.tool === 'draw' || kind === 'ink'));
+  ctxHighlight.classList.toggle('hidden', !(state.tool === 'highlight' || kind === 'highlight'));
+  ctxShape.classList.toggle('hidden', !(state.tool === 'shape' || kind === 'shape'));
   btnDeleteObj.classList.toggle('hidden', !sel);
   btnDuplicateObj.classList.toggle('hidden', !sel || sel.type === 'ink');
   btnReplaceImg.classList.toggle('hidden', !sel || (sel.type !== 'image' && sel.type !== 'sig'));
+  if (kind === 'shape') {
+    shapeKindInput.value = sel.kind;
+    shapeStrokeInput.value = safeColor(sel.stroke, '#d92d20');
+    shapeWidthInput.value = sel.width;
+    shapeFillInput.value = safeColor(sel.fill, '#ffffff');
+    shapeFilledInput.checked = !!sel.filled;
+  } else if (kind === 'highlight') {
+    hlColorInput.value = sel.color;
+    hlOpacityInput.value = Math.round(sel.opacity * 100);
+  }
   if (sel && sel.type === 'text') {
     textSizeInput.value = Math.round(sel.size * 10) / 10;
     textColorInput.value = sel.color;
@@ -287,8 +319,12 @@ function updateCtx() {
 
 async function handleNewFile(file) {
   if (!file) return;
-  if (state.doc && state.objects.length &&
-      !window.confirm('Loading a new PDF will discard your current edits. Continue?')) return;
+  if (state.doc && state.dirty && !(await confirmDialog({
+    title: 'Open another PDF?',
+    text: 'The changes you have not saved in this one will be lost.',
+    ok: 'Open it',
+    danger: true
+  }))) return;
   try {
     const buf = await file.arrayBuffer();
     await loadBytes(new Uint8Array(buf), file.name || 'document.pdf');
@@ -401,7 +437,11 @@ async function unlockForEditing(bytes, password) {
   }
 }
 
-async function loadBytes(bytes, name) {
+/**
+ * @param {object} [opts] { dirty } — set when the bytes are the product of
+ *                        work in this tab rather than a file as it was opened
+ */
+async function loadBytes(bytes, name, opts) {
   showBanner(null);
   setMeta('Opening…');
   let opened;
@@ -422,13 +462,21 @@ async function loadBytes(bytes, name) {
   if (state.doc) { try { state.doc.destroy(); } catch (e) { /* ignore */ } }
   if (state.io) state.io.disconnect();
   clearSelection();
+  for (const p of state.pages) {
+    if (p.renderTask) { try { p.renderTask.cancel(); } catch (e) { /* already done */ } }
+    PSExtract.releaseCanvas(p.canvas);
+    PSExtract.releaseCanvas(p.ink);
+  }
+  renderQueue.wanted.clear();
   state.bytes = bytes;
   state.name = name || 'document.pdf';
   state.doc = doc;
   state.objects = [];
   forgetPageImages();
   forgetPageParagraphs();
-  state.undoStack = [];
+  resetHistory();
+  state.dirty = !!(opts && opts.dirty);
+  document.title = state.name + ' — PDF Studio';
   state.place = null;
   state.zoom = 1;
   state.currentPage = 1;
@@ -466,17 +514,25 @@ function metaText() {
 async function buildPages() {
   pagesEl.textContent = '';
   state.pages = [];
-  const n = state.doc.numPages;
+  const doc = state.doc;
+  const n = doc.numPages;
   let maxW = 0;
-  for (let i = 1; i <= n; i++) {
-    const page = await state.doc.getPage(i);
-    const viewport1 = page.getViewport({ scale: 1 });
-    maxW = Math.max(maxW, viewport1.width);
-    state.pages.push({
-      index: i - 1, page, viewport1,
-      wrap: null, canvas: null, ink: null, overlay: null,
-      renderedScale: null, renderTask: null, visible: false
+  // Asked for a batch at a time: each request is a round trip to the worker,
+  // and a thousand of them one after another is a noticeable wait.
+  for (let first = 1; first <= n; first += 64) {
+    const batch = [];
+    for (let i = first; i <= Math.min(n, first + 63); i++) batch.push(doc.getPage(i));
+    const pages = await Promise.all(batch);
+    pages.forEach((page, k) => {
+      const viewport1 = page.getViewport({ scale: 1 });
+      maxW = Math.max(maxW, viewport1.width);
+      state.pages.push({
+        index: first - 1 + k, page, viewport1,
+        wrap: null, canvas: null, ink: null, overlay: null,
+        renderedKey: null, renderTask: null, visible: false
+      });
     });
+    if (n > 256) setMeta('Opening… ' + Math.min(n, first + 63) + ' of ' + n + ' pages');
   }
   updateFitScale(maxW);
 
@@ -487,23 +543,31 @@ async function buildPages() {
       if (!p) continue;
       p.visible = en.isIntersecting;
       if (en.isIntersecting) {
-        renderPage(idx);
+        requestRender(idx);
+        redrawInk(idx);
         if (state.tool === 'pictures') markPageImages(idx);
         if (state.tool === 'edittext') markPageParagraphs(idx);
         if (en.intersectionRatio > 0.4) setCurrentPage(idx + 1);
+      } else {
+        scheduleEviction();
       }
     }
   }, { root: viewerEl, rootMargin: '600px 0px', threshold: [0, 0.45] });
 
+  const fragment = document.createDocumentFragment();
   for (const p of state.pages) {
     const wrap = document.createElement('div');
     wrap.className = 'page-wrap';
     wrap.dataset.index = p.index;
 
+    // Both start empty: a canvas holds memory from the moment it has a size,
+    // and most pages of a long document are never scrolled to.
     const canvas = document.createElement('canvas');
     canvas.className = 'page-canvas';
+    canvas.width = canvas.height = 0;
     const ink = document.createElement('canvas');
     ink.className = 'ink-canvas';
+    ink.width = ink.height = 0;
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     const num = document.createElement('div');
@@ -521,10 +585,13 @@ async function buildPages() {
     p.canvas = canvas;
     p.ink = ink;
     p.overlay = overlay;
-    pagesEl.appendChild(wrap);
-    state.io.observe(wrap);
+    fragment.appendChild(wrap);
   }
+  // Sized before they are observed, so the first report of what is in view is
+  // made against pages of the right height rather than a stack of empty ones.
+  pagesEl.appendChild(fragment);
   layoutAll();
+  for (const p of state.pages) state.io.observe(p.wrap);
 }
 
 function updateFitScale(maxW) {
@@ -537,67 +604,233 @@ function updateFitScale(maxW) {
   state.fitScale = clamp(avail / maxW, 0.25, 1.6);
 }
 
+/*
+ * Laying out is immediate and cheap: the pages take their new size and the
+ * pictures already drawn are stretched to fit by the stylesheet. Drawing them
+ * again at the new size is what costs, so that waits until the size has
+ * stopped changing — a zoom by wheel passes through a dozen sizes on the way.
+ */
+let renderTimer = null;
+
 function layoutAll() {
   const S = curScale();
   for (const p of state.pages) {
     p.wrap.style.width = (p.viewport1.width * S) + 'px';
     p.wrap.style.height = (p.viewport1.height * S) + 'px';
-    p.renderedScale = null;
   }
-  for (const p of state.pages) if (p.visible) renderPage(p.index);
   for (const o of state.objects) applyObjectLayout(o);
   refreshImageMarks();
   refreshTextMarks();
   positionSearchHits();
   zoomLabel.textContent = Math.round(state.zoom * 100) + '%';
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(renderVisible, 110);
 }
 
+function renderVisible() {
+  for (const p of state.pages) {
+    if (!p.visible) continue;
+    requestRender(p.index);
+    redrawInk(p.index);
+  }
+}
+
+/*
+ * How many canvas pixels to give a page point.
+ *
+ * It follows the zoom and the screen's density, up to a budget: a page at 500%
+ * on a dense screen would otherwise ask for a canvas of half a gigabyte. Past
+ * the budget the picture is drawn as large as the budget allows and stretched
+ * the rest of the way.
+ */
+const PAGE_PIXEL_BUDGET = (navigator.deviceMemory && navigator.deviceMemory <= 4) ? 9e6 : 16e6;
+
+function pixelScale(p) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let k = curScale() * dpr;
+  const area = p.viewport1.width * p.viewport1.height * k * k;
+  if (area > PAGE_PIXEL_BUDGET) k *= Math.sqrt(PAGE_PIXEL_BUDGET / area);
+  return k;
+}
+
+/*
+ * Pages are drawn two at a time, nearest the one being read first. Started
+ * all at once they share the one thread between them and every page —
+ * including the one in front of the reader — arrives late.
+ */
+const renderQueue = { active: 0, wanted: new Set() };
+
+function requestRender(idx) {
+  renderQueue.wanted.add(idx);
+  pumpRenders();
+}
+
+function pumpRenders() {
+  while (renderQueue.active < 2 && renderQueue.wanted.size) {
+    let best = -1, bestD = Infinity;
+    for (const idx of renderQueue.wanted) {
+      const d = Math.abs(idx + 1 - state.currentPage);
+      if (d < bestD) { bestD = d; best = idx; }
+    }
+    renderQueue.wanted.delete(best);
+    const p = state.pages[best];
+    if (!p || !p.visible) continue;
+    renderQueue.active++;
+    renderPage(best).then(() => {
+      renderQueue.active--;
+      pumpRenders();
+    });
+  }
+}
+
+/** What a page's picture depends on: its scale, and which words are hidden. */
+function renderKey(p) {
+  return pixelScale(p).toFixed(4) + '|' + hiddenTextKey(p.index);
+}
+
+/**
+ * Draw a page.
+ *
+ * It is drawn on a canvas of its own and swapped in when finished, so the
+ * page never goes blank: until then the old picture stays up, stretched to
+ * the new size.
+ */
 async function renderPage(idx) {
   const p = state.pages[idx];
   if (!p) return;
-  const S = curScale();
-  if (p.renderedScale === S) return;
+  const key = renderKey(p);
+  if (p.renderedKey === key) return;
+  // Already being drawn exactly like this: let it finish rather than start over.
+  if (p.renderTask && p.renderingKey === key) return;
   if (p.renderTask) { try { p.renderTask.cancel(); } catch (e) { /* ignore */ } }
+  p.renderingKey = key;
 
-  const vp = p.page.getViewport({ scale: S });
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const doc = state.doc;
+  const k = pixelScale(p);
+  const vp = p.page.getViewport({ scale: k });
+  const canvas = document.createElement('canvas');
+  canvas.className = 'page-canvas';
+  canvas.width = Math.max(1, Math.floor(vp.width));
+  canvas.height = Math.max(1, Math.floor(vp.height));
+  applyHiddenText(canvas, idx, k);
 
-  p.canvas.width = Math.floor(vp.width * dpr);
-  p.canvas.height = Math.floor(vp.height * dpr);
-  p.canvas.style.width = vp.width + 'px';
-  p.canvas.style.height = vp.height + 'px';
-
-  p.ink.width = Math.floor(vp.width * dpr);
-  p.ink.height = Math.floor(vp.height * dpr);
-  p.ink.style.width = vp.width + 'px';
-  p.ink.style.height = vp.height + 'px';
-  p.ink.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
-  redrawInk(idx);
-
-  const ctx = p.canvas.getContext('2d');
-  const task = p.page.render({
-    canvasContext: ctx,
-    viewport: vp,
-    transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null
-  });
+  const task = p.page.render({ canvasContext: canvas.getContext('2d'), viewport: vp });
   p.renderTask = task;
+  let done = false;
   try {
     await task.promise;
-    p.renderedScale = S;
-  } catch (e) { /* render cancelled — a newer render owns the canvas */ }
+    done = true;
+  } catch (e) { /* cancelled — a newer render owns the page */ }
   if (p.renderTask === task) p.renderTask = null;
+  // Another document may have been opened while this was drawing.
+  if (!done || state.doc !== doc || state.pages[idx] !== p) {
+    PSExtract.releaseCanvas(canvas);
+    return;
+  }
+  const old = p.canvas;
+  old.replaceWith(canvas);
+  PSExtract.releaseCanvas(old);
+  p.canvas = canvas;
+  p.renderedKey = key;
+  settleHiddenText(idx, canvas);
+  // The scale may have moved on while this was being drawn.
+  if (p.visible && renderKey(p) !== key) requestRender(idx);
+}
+
+/*
+ * A long document scrolled from end to end would otherwise keep a full-size
+ * picture of every page it passed. Pages that have gone out of view, and are
+ * not next to the one being read, give theirs back; they are drawn again if
+ * they come back.
+ */
+let evictionTimer = null;
+
+function scheduleEviction() {
+  clearTimeout(evictionTimer);
+  evictionTimer = setTimeout(evictFarPages, 1500);
+}
+
+function evictFarPages() {
+  for (const p of state.pages) {
+    if (p.visible || Math.abs(p.index + 1 - state.currentPage) <= 2) continue;
+    if (p.renderTask) { try { p.renderTask.cancel(); } catch (e) { /* ignore */ } }
+    if (p.canvas.width) {
+      PSExtract.releaseCanvas(p.canvas);
+      p.renderedKey = null;
+      try { p.page.cleanup(); } catch (e) { /* still in use; next time */ }
+    }
+    if (p.ink.width) PSExtract.releaseCanvas(p.ink);
+  }
 }
 
 /* ============================== zoom & navigation ============================== */
 
-function setZoom(z) {
-  if (!state.doc) return;
-  state.zoom = clamp(z, 0.25, 5);
-  layoutAll();
+/**
+ * Remember what is under a point of the window — the middle of the viewer
+ * unless told otherwise — as a page and a position within it, so the same
+ * spot can be put back there after the pages change size.
+ */
+function captureAnchor(point) {
+  if (!state.pages.length) return null;
+  const box = viewerEl.getBoundingClientRect();
+  const x = point ? point.x : box.left + box.width / 2;
+  const y = point ? point.y : box.top + box.height / 2;
+  let best = null, bestD = Infinity;
+  const near = state.pages.filter((p) => p.visible);
+  if (!near.length && state.pages[state.currentPage - 1]) near.push(state.pages[state.currentPage - 1]);
+  for (const p of near) {
+    const r = p.wrap.getBoundingClientRect();
+    const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+    if (d < bestD) { bestD = d; best = { p, r }; }
+  }
+  if (!best || !best.r.width || !best.r.height) return null;
+  return { p: best.p, fx: (x - best.r.left) / best.r.width, fy: (y - best.r.top) / best.r.height, x, y };
 }
+
+function restoreAnchor(a) {
+  if (!a) return;
+  const r = a.p.wrap.getBoundingClientRect();
+  viewerEl.scrollLeft += r.left + a.fx * r.width - a.x;
+  viewerEl.scrollTop += r.top + a.fy * r.height - a.y;
+}
+
+/** Lay out again, keeping what the reader was looking at where it was. */
+function relayout(point) {
+  const anchor = captureAnchor(point);
+  layoutAll();
+  restoreAnchor(anchor);
+}
+
+function setZoom(z, point) {
+  if (!state.doc) return;
+  const next = clamp(z, 0.25, 5);
+  if (next === state.zoom) return;
+  const anchor = captureAnchor(point);
+  state.zoom = next;
+  layoutAll();
+  restoreAnchor(anchor);
+}
+
+function fitWidth() {
+  if (!state.doc) return;
+  const anchor = captureAnchor();
+  updateFitScale();
+  state.zoom = 1;
+  layoutAll();
+  restoreAnchor(anchor);
+}
+
 $('#zoom-in').addEventListener('click', () => setZoom(state.zoom * 1.15));
 $('#zoom-out').addEventListener('click', () => setZoom(state.zoom / 1.15));
-$('#zoom-fit').addEventListener('click', () => { updateFitScale(); setZoom(1); });
+$('#zoom-fit').addEventListener('click', fitWidth);
+
+// Ctrl + wheel, which is also what a pinch on a trackpad arrives as, zooms
+// about the pointer rather than about the top of the document.
+viewerEl.addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || !state.doc) return;
+  e.preventDefault();
+  setZoom(state.zoom * Math.exp(-e.deltaY * 0.0025), { x: e.clientX, y: e.clientY });
+}, { passive: false });
 
 function setCurrentPage(n) {
   if (state.currentPage === n) return;
@@ -627,13 +860,13 @@ let resizeTimer = null;
 window.addEventListener('resize', () => {
   if (!state.doc) return;
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { updateFitScale(); layoutAll(); }, 200);
+  resizeTimer = setTimeout(() => { updateFitScale(); relayout(); }, 200);
 });
 
 $('#btn-sidebar').addEventListener('click', () => {
   sidebarEl.classList.toggle('collapsed');
   $('#btn-sidebar').classList.toggle('on', !sidebarEl.classList.contains('collapsed'));
-  setTimeout(() => { updateFitScale(); layoutAll(); }, 0);
+  setTimeout(() => { updateFitScale(); relayout(); }, 0);
 });
 $('#btn-sidebar').classList.add('on');
 
@@ -665,12 +898,132 @@ document.addEventListener('fullscreenchange', () => {
 
 /* ============================== objects ============================== */
 
-function addObject(o) {
+/*
+ * History.
+ *
+ * Every change to the annotations — adding, deleting, moving, resizing,
+ * retyping, recolouring — ends with commit(), which keeps a copy of the whole
+ * list. Undo and redo put a copy back. Copies are cheap: the objects are
+ * small, and the two heavy things they point at, a picture's data URL and a
+ * pen stroke's points, are never changed in place, so every copy shares them.
+ */
+const history = { stack: [], index: -1, limit: 150 };
+
+function snapshotObjects() {
+  return state.objects.map((o) => {
+    const copy = Object.assign({}, o);
+    delete copy.el;
+    return copy;
+  });
+}
+
+function refreshHistoryButtons() {
+  if (btnUndo) btnUndo.disabled = history.index <= 0;
+  if (btnRedo) btnRedo.disabled = history.index >= history.stack.length - 1;
+}
+
+function resetHistory() {
+  history.stack = [snapshotObjects()];
+  history.index = 0;
+  refreshHistoryButtons();
+}
+
+function commit() {
+  history.stack.length = history.index + 1;
+  history.stack.push(snapshotObjects());
+  if (history.stack.length > history.limit) history.stack.shift();
+  history.index = history.stack.length - 1;
+  state.dirty = true;
+  refreshHistoryButtons();
+  document.dispatchEvent(new CustomEvent('ps:objects-changed'));
+}
+
+// A colour picker or a slider reports dozens of values on the way to the one
+// that is wanted; they are one step to undo, not dozens.
+let commitTimer = null;
+function commitSoon() {
+  clearTimeout(commitTimer);
+  commitTimer = setTimeout(commit, 450);
+}
+
+function flushCommit() {
+  if (!commitTimer) return;
+  clearTimeout(commitTimer);
+  commitTimer = null;
+  commit();
+}
+
+function restoreObjects(snapshot) {
+  const wanted = new Map(snapshot.map((o) => [o.id, o]));
+  const selectedId = state.selection ? state.selection.id : null;
+  clearSelection();
+  const inkPages = new Set();
+  const live = new Map();
+  for (const o of state.objects) {
+    if (wanted.has(o.id)) { live.set(o.id, o); continue; }
+    if (o.el) o.el.remove();
+    if (o.type === 'ink') inkPages.add(o.pageIndex);
+  }
+  state.objects = snapshot.map((saved) => {
+    let o = live.get(saved.id);
+    if (o) {
+      // The same object, so anything holding on to it still holds the right thing.
+      const el = o.el;
+      for (const key of Object.keys(o)) delete o[key];
+      Object.assign(o, saved);
+      if (el) { o.el = el; syncObjectElement(o); }
+    } else {
+      o = Object.assign({}, saved);
+      if (o.type !== 'ink') mountObject(o);
+    }
+    if (o.type === 'ink') inkPages.add(o.pageIndex);
+    return o;
+  });
+  // Put the elements back in list order: what was added later lies on top.
+  for (const o of state.objects) {
+    if (!o.el) continue;
+    const p = state.pages[o.pageIndex];
+    if (p) p.overlay.appendChild(o.el);
+    applyObjectLayout(o);
+  }
+  for (const pi of inkPages) redrawInk(pi);
+  refreshHiddenText();
+  const again = selectedId != null && state.objects.find((o) => o.id === selectedId && o.el);
+  if (again) select(again);
+  refreshImageMarks();
+  refreshTextMarks();
+  state.dirty = true;
+  refreshHistoryButtons();
+  document.dispatchEvent(new CustomEvent('ps:objects-changed'));
+}
+
+function undo() {
+  flushCommit();
+  if (history.index <= 0) return;
+  history.index--;
+  restoreObjects(history.stack[history.index]);
+}
+
+function redo() {
+  flushCommit();
+  if (history.index >= history.stack.length - 1) return;
+  history.index++;
+  restoreObjects(history.stack[history.index]);
+}
+
+function objectById(id) {
+  return id == null ? null : state.objects.find((o) => o.id === id) || null;
+}
+
+/**
+ * @param {object} [opts] { silent } — add without a history step, for a change
+ *                        made of several objects that commits once at the end
+ */
+function addObject(o, opts) {
   o.id = uid++;
   state.objects.push(o);
   mountObject(o);
-  state.undoStack.push(o.id);
-  document.dispatchEvent(new CustomEvent('ps:objects-changed'));
+  if (!(opts && opts.silent)) commit();
   return o;
 }
 
@@ -739,7 +1092,6 @@ function mountObject(o) {
 
   if (o.type === 'image' || o.type === 'sig') {
     const img = document.createElement('img');
-    img.src = o.url;
     img.draggable = false;
     el.appendChild(img);
   } else if (o.type === 'text') {
@@ -751,29 +1103,47 @@ function mountObject(o) {
       e.stopPropagation();
       startTextEdit(o, { clientX: e.clientX, clientY: e.clientY });
     });
-  } else if (o.type === 'cover') {
-    el.style.background = safeColor(o.color, '#ffffff');
-  } else if (o.type === 'highlight') {
-    el.style.background = o.color;
-    el.style.opacity = String(o.opacity);
-  } else if (o.type === 'shape') {
-    el.innerHTML = shapeSvg(o);
   } else if (o.type === 'note') {
     el.textContent = '✎';
-    el.title = o.text || 'Sticky note';
     el.addEventListener('dblclick', (e) => { e.stopPropagation(); editNote(o); });
   } else if (o.type === 'stamp') {
     const box = document.createElement('div');
     box.className = 'stamp-box';
-    box.textContent = o.text;
-    box.style.color = o.color;
     el.appendChild(box);
   }
 
   el.addEventListener('pointerdown', (e) => beginDrag(e, o));
   o.el = el;
+  syncObjectElement(o);
   p.overlay.appendChild(el);
   applyObjectLayout(o);
+}
+
+/**
+ * Make an object's element show what the object now says: its colour, its
+ * picture, its words. Used when it is first mounted and again whenever undo
+ * or the toolbar changes it.
+ */
+function syncObjectElement(o) {
+  const el = o.el;
+  if (!el) return;
+  if (o.type === 'image' || o.type === 'sig') {
+    const img = el.querySelector('img');
+    if (img && img.getAttribute('src') !== o.url) img.src = o.url;
+  } else if (o.type === 'cover') {
+    el.style.background = safeColor(o.color, '#ffffff');
+    // A cover over words that have really been taken out of the picture has
+    // nothing left to hide.
+    el.classList.toggle('clean', !!o.clean);
+  } else if (o.type === 'highlight') {
+    el.style.background = safeColor(o.color, '#ffe14d');
+    el.style.opacity = String(o.opacity);
+  } else if (o.type === 'note') {
+    el.title = o.text || 'Sticky note';
+  } else if (o.type === 'stamp') {
+    const box = el.querySelector('.stamp-box');
+    if (box) { box.textContent = o.text; box.style.color = safeColor(o.color, '#d92d20'); }
+  }
 }
 
 function applyObjectLayout(o) {
@@ -798,7 +1168,16 @@ function applyObjectLayout(o) {
     // Matching the export's typeface and alignment on screen keeps the preview
     // wrapping close to what the saved file will do.
     t.style.fontFamily = CSS_FAMILY[o.family] || '';
-    t.style.textAlign = o.align === 'center' || o.align === 'right' ? o.align : '';
+    t.style.textAlign = o.align === 'center' || o.align === 'right' || o.align === 'justify' ? o.align : '';
+    /*
+     * Text lifted off the page knows exactly where its first baseline was.
+     * The browser puts a first baseline wherever the face's own metrics and
+     * the line height happen to land it, which is close but not the same, so
+     * the difference is taken up here — and the saved file uses the same
+     * figure, so what is shown is what is written.
+     */
+    const shift = (textRise(o) - domBaselineRatio(o) * o.size) * S;
+    t.style.transform = Math.abs(shift) > 0.05 ? 'translateY(' + shift.toFixed(2) + 'px)' : '';
     o.el.style.height = 'auto';
     o.h = Math.max(o.size * 1.25, o.el.offsetHeight / S);
   } else {
@@ -836,21 +1215,21 @@ function clearSelection() {
   updateCtx();
 }
 
-function deleteObject(id) {
+function deleteObject(id, opts) {
   const i = state.objects.findIndex((o) => o.id === id);
   if (i < 0) return;
   const o = state.objects[i];
   state.objects.splice(i, 1);
-  state.undoStack = state.undoStack.filter((x) => x !== id);
   if (state.selection === o) state.selection = null;
   if (o.el) o.el.remove();
   if (o.type === 'ink') redrawInk(o.pageIndex);
   updateCtx();
-  document.dispatchEvent(new CustomEvent('ps:objects-changed'));
+  if (opts && opts.silent) document.dispatchEvent(new CustomEvent('ps:objects-changed'));
+  else commit();
 }
 
 function duplicateObject(o) {
-  if (!o || o.type === 'ink') return;
+  if (!o || o.type === 'ink' || o.type === 'cover') return;
   const copy = Object.assign({}, o);
   delete copy.el;
   delete copy.id;
@@ -859,9 +1238,15 @@ function duplicateObject(o) {
   select(addObject(copy));
 }
 
-function undo() {
-  const id = state.undoStack.pop();
-  if (id != null) deleteObject(id);
+/** Move the selection with the arrow keys: a point at a time, ten with Shift. */
+function nudgeSelection(dx, dy) {
+  const o = state.selection;
+  const p = o && state.pages[o.pageIndex];
+  if (!p) return;
+  o.x = clamp(o.x + dx, -o.w * 0.5, p.viewport1.width - o.w * 0.5);
+  o.y = clamp(o.y + dy, -o.h * 0.5, p.viewport1.height - o.h * 0.5);
+  applyObjectLayout(o);
+  commitSoon();
 }
 
 function beginDrag(e, o) {
@@ -881,9 +1266,12 @@ function beginDrag(e, o) {
   const up = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    if (o.x !== ox || o.y !== oy) commit();
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
 }
 
 function beginResize(e, o) {
@@ -910,9 +1298,12 @@ function beginResize(e, o) {
   const up = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    if (o.w !== ow || o.h !== oh) commit();
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
 }
 
 /**
@@ -955,6 +1346,9 @@ function startTextEdit(o, at) {
     sel.addRange(r);
   }
 
+  const before = o.text;
+  const fresh = !!o.fresh;
+  delete o.fresh;
   const onInput = () => {
     o.text = t.innerText;
     applyObjectLayout(o);
@@ -964,22 +1358,33 @@ function startTextEdit(o, at) {
     t.removeEventListener('blur', onBlur);
     t.contentEditable = 'false';
     o.el.classList.remove('editing');
-    o.text = t.innerText.replace(/ /g, ' ').replace(/\n$/, '');
-    if (!o.text.trim()) { deleteObject(o.id); return; }
-    t.textContent = o.text;
-    applyObjectLayout(o);
+    finishTextEdit(o, t, before, fresh);
   };
   t.addEventListener('input', onInput);
   t.addEventListener('blur', onBlur);
 }
 
-function editNote(o) {
-  const text = window.prompt('Note', o.text || '');
-  if (text === null) return;
-  o.text = text;
-  if (o.el) o.el.title = text || 'Sticky note';
+function finishTextEdit(o, t, before, fresh) {
+  o.text = t.innerText.replace(/ /g, ' ').replace(/\n$/, '');
+  if (!o.text.trim()) {
+    // A box that was opened and left empty never happened, as far as undo is
+    // concerned; one that had words in it was deleted.
+    deleteObject(o.id, { silent: fresh });
+    return;
+  }
+  t.textContent = o.text;
+  applyObjectLayout(o);
+  if (fresh || o.text !== before) commit();
+}
+
+async function editNote(o) {
+  const text = await textDialog({ title: 'Note', value: o.text || '', ok: 'Save note' });
+  if (text === null || !state.objects.includes(o)) return;
   if (!text.trim()) { deleteObject(o.id); return; }
-  document.dispatchEvent(new CustomEvent('ps:objects-changed'));
+  if (text === o.text) return;
+  o.text = text;
+  syncObjectElement(o);
+  commit();
 }
 
 /* ============================== overlay tools ============================== */
@@ -1009,20 +1414,22 @@ function createTextAt(pi, bx, by) {
   const w = Math.min(240, p.viewport1.width * 0.6);
   let x = bx;
   if (x + w > p.viewport1.width) x = Math.max(0, p.viewport1.width - w);
+  // Not a step in the history until something has been typed into it.
   const o = addObject({
     type: 'text', pageIndex: pi, x, y: by, w,
     h: state.textDefaults.size * 1.3,
     text: '', size: state.textDefaults.size, color: state.textDefaults.color,
-    bold: state.textDefaults.bold, italic: state.textDefaults.italic
-  });
+    bold: state.textDefaults.bold, italic: state.textDefaults.italic,
+    family: state.textDefaults.family, fresh: true
+  }, { silent: true });
   setTool('select');
   select(o);
   startTextEdit(o);
 }
 
-function createNoteAt(pi, bx, by) {
-  const text = window.prompt('Note');
-  if (text === null || !text.trim()) { setTool('select'); return; }
+async function createNoteAt(pi, bx, by) {
+  const text = await textDialog({ title: 'Note', value: '', ok: 'Add note' });
+  if (text === null || !text.trim() || !state.pages[pi]) { setTool('select'); return; }
   const o = addObject({
     type: 'note', pageIndex: pi, x: bx, y: by, w: 18, h: 18,
     text: text.trim(), color: '#ffd666'
@@ -1084,13 +1491,14 @@ function beginRubber(p, pi, sx, sy, kind) {
 
 function beginStroke(p, pi, sx, sy) {
   const S = curScale();
-  const ictx = p.ink.getContext('2d');
+  // The ink layer is drawn in page points; its context carries the scale.
+  const ictx = inkContext(p);
   ictx.strokeStyle = state.pen.color;
-  ictx.lineWidth = state.pen.size * S;
+  ictx.lineWidth = state.pen.size;
   ictx.lineCap = 'round';
   ictx.lineJoin = 'round';
   ictx.beginPath();
-  ictx.moveTo(sx * S, sy * S);
+  ictx.moveTo(sx, sy);
   const pts = [{ x: sx, y: sy }];
   let last = { x: sx, y: sy };
   const move = (e) => {
@@ -1100,20 +1508,22 @@ function beginStroke(p, pi, sx, sy) {
     const dx = cx - last.x, dy = cy - last.y;
     if (dx * dx + dy * dy < 0.9) return;
     pts.push({ x: cx, y: cy });
-    ictx.lineTo(cx * S, cy * S);
+    ictx.lineTo(cx, cy);
     ictx.stroke();
     ictx.beginPath();
-    ictx.moveTo(cx * S, cy * S);
+    ictx.moveTo(cx, cy);
     last = { x: cx, y: cy };
   };
   const up = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
     addObject({ type: 'ink', pageIndex: pi, points: pts, size: state.pen.size, color: state.pen.color });
     redrawInk(pi);
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
 }
 
 function placeAt(pi, bx, by) {
@@ -1184,17 +1594,37 @@ function drawSmoothStroke(ctx, pts, widthPx, color, S) {
   ctx.stroke();
 }
 
+/**
+ * The page's ink canvas, sized for the current zoom, with a context that
+ * draws in page points. The canvas has no size until it is first needed: a
+ * layer of ink for every page of a document nobody has drawn on is memory
+ * spent on nothing.
+ */
+function inkContext(p) {
+  const k = pixelScale(p);
+  const w = Math.max(1, Math.floor(p.viewport1.width * k));
+  const h = Math.max(1, Math.floor(p.viewport1.height * k));
+  if (p.ink.width !== w || p.ink.height !== h) {
+    p.ink.width = w;
+    p.ink.height = h;
+  }
+  const ctx = p.ink.getContext('2d');
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  return ctx;
+}
+
 function redrawInk(pi) {
   const p = state.pages[pi];
   if (!p || !p.ink) return;
-  const ctx = p.ink.getContext('2d');
-  ctx.clearRect(0, 0, p.ink.width, p.ink.height);
-  const S = curScale();
-  for (const o of state.objects) {
-    if (o.type === 'ink' && o.pageIndex === pi) {
-      drawSmoothStroke(ctx, o.points, o.size * S, o.color, S);
-    }
+  const strokes = state.objects.filter((o) => o.type === 'ink' && o.pageIndex === pi);
+  if (!strokes.length) {
+    if (p.ink.width) PSExtract.releaseCanvas(p.ink);
+    return;
   }
+  if (!p.visible) return;   // drawn when the page comes into view
+  const ctx = inkContext(p);
+  ctx.clearRect(0, 0, p.viewport1.width, p.viewport1.height);
+  for (const o of strokes) drawSmoothStroke(ctx, o.points, o.size, o.color, 1);
 }
 
 /* ============================== signature: pad ============================== */
@@ -1469,9 +1899,11 @@ sigTypeColor.addEventListener('change', () => renderTypedSignature(false));
 function openModal(el) { el.classList.remove('hidden'); }
 function closeModal(el) { el.classList.add('hidden'); }
 
+// A click on the dimmed backdrop closes a dialog — except the two that are
+// waiting for an answer, which have to be answered.
 for (const wrap of $$('.modal-wrap')) {
   wrap.addEventListener('pointerdown', (e) => {
-    if (e.target === wrap && wrap !== pwModal) closeModal(wrap);
+    if (e.target === wrap && wrap !== pwModal && wrap !== askModal) closeModal(wrap);
   });
 }
 
@@ -1629,12 +2061,11 @@ imageInput.addEventListener('change', () => {
       if (replacing && state.objects.includes(replacing)) {
         // Keep the hole the old picture filled; only the artwork changes.
         replacing.url = url;
-        const el = replacing.el && replacing.el.querySelector('img');
-        if (el) el.src = url;
+        syncObjectElement(replacing);
         replacing.h = replacing.w * (img.naturalHeight / img.naturalWidth);
         applyObjectLayout(replacing);
         select(replacing);
-        document.dispatchEvent(new CustomEvent('ps:objects-changed'));
+        commit();
         return;
       }
       beginPlace({ kind: 'image', url, w: img.naturalWidth, h: img.naturalHeight });
@@ -1738,9 +2169,12 @@ function imageAt(list, x, y) {
 }
 
 function liftImage(index, im) {
-  if (im.lifted && state.objects.includes(im.lifted)) {
-    select(im.lifted);
-    return im.lifted;
+  // What was lifted is remembered by id, not by object: undo and redo put
+  // back copies, and the picture on the page must still know its own.
+  const already = objectById(im.liftedId);
+  if (already) {
+    select(already);
+    return already;
   }
   let url;
   try {
@@ -1752,18 +2186,19 @@ function liftImage(index, im) {
   const rect = { x: im.x, y: im.y, w: im.w, h: im.h };
   // The cover goes down first so it sits behind the picture, and only once:
   // lifting, undoing and lifting again must not stack two of them.
-  if (!(im.cover && state.objects.includes(im.cover))) {
-    im.cover = addObject({
+  if (!objectById(im.coverId)) {
+    im.coverId = addObject({
       type: 'cover', pageIndex: index,
       x: rect.x, y: rect.y, w: rect.w, h: rect.h,
       color: sampleBackdrop(index, rect)
-    });
+    }, { silent: true }).id;
   }
   const obj = addObject({
     type: 'image', pageIndex: index, url, fromPage: true,
     x: rect.x, y: rect.y, w: rect.w, h: rect.h
-  });
-  im.lifted = obj;
+  }, { silent: true });
+  im.liftedId = obj.id;
+  commit();   // the cover and the picture are one step to undo
   setTool('select');
   select(obj);
   showBanner('Picture lifted off the page. Drag to move, corner dot to resize, ' +
@@ -1787,7 +2222,7 @@ async function markPageImages(pi) {
   clearImageMarks(pi);
   const S = curScale();
   for (const im of list) {
-    if (im.lifted && state.objects.includes(im.lifted)) continue;
+    if (objectById(im.liftedId)) continue;
     const el = document.createElement('div');
     el.className = 'imgpick';
     el.style.left = (im.x * S) + 'px';
@@ -1844,8 +2279,10 @@ function pageParagraphs(index) {
   if (pageParaCache.has(index)) return pageParaCache.get(index);
   const p = state.pages[index];
   if (!p) return Promise.resolve([]);
+  // Paragraphs, and each cell of each table: a cell is edited on its own, not
+  // as part of a row that runs through its neighbours.
   const job = PSExtract.extractPage(p.page, index, {})
-    .then((d) => d.paragraphs.filter((q) => q.text.trim() && !q.invisible))
+    .then((d) => PSExtract.textBlocks(d).filter((q) => q.text.trim() && !q.invisible))
     .catch(() => []);
   pageParaCache.set(index, job);
   return job;
@@ -1877,11 +2314,36 @@ function familyFor(para) {
   return 'sans';
 }
 
+/**
+ * Where the glyphs of a block sit, as one thin box per run of text: from just
+ * above the tallest letter to just below the deepest, and no wider than the
+ * run. A glyph whose origin falls in one of these is one of the block's own.
+ *
+ * The boxes are built run by run rather than as one rectangle round the block
+ * so that nothing else that happens to stand inside that rectangle — the end
+ * of the line above, a neighbouring cell — is taken with it.
+ */
+function eraseRects(para) {
+  const rects = [];
+  for (const line of para.lines) {
+    for (const it of line.items) {
+      const pad = Math.max(0.5, it.size * 0.1);
+      const width = it.w > 0 ? it.w : it.size * 0.5 * it.str.length;
+      rects.push({
+        x0: it.x - pad, x1: it.x + width + pad,
+        y0: it.baseline - it.size * 0.75, y1: it.baseline + it.size * 0.3
+      });
+    }
+  }
+  return rects;
+}
+
 function liftParagraph(index, para, at) {
-  if (para.lifted && state.objects.includes(para.lifted)) {
-    select(para.lifted);
-    startTextEdit(para.lifted, at);
-    return para.lifted;
+  const already = objectById(para.liftedId);
+  if (already) {
+    select(already);
+    startTextEdit(already, at);
+    return already;
   }
   // A little slack so ascenders and descenders are covered too.
   const pad = Math.max(1.5, para.size * 0.22);
@@ -1891,20 +2353,32 @@ function liftParagraph(index, para, at) {
     w: para.w + pad * 2,
     h: para.h + pad * 2
   };
+  let glyphs = 0;
+  for (const line of para.lines) for (const it of line.items) glyphs += it.str.replace(/\s/g, '').length;
   // A block lifted, undone and lifted again must not end up under two covers.
-  if (!(para.cover && state.objects.includes(para.cover))) {
-    para.cover = addObject({
+  if (!objectById(para.coverId)) {
+    para.coverId = addObject({
       type: 'cover', pageIndex: index,
       x: rect.x, y: rect.y, w: rect.w, h: rect.h,
-      color: sampleBackdrop(index, rect)
-    });
+      color: sampleBackdrop(index, rect),
+      erase: eraseRects(para),
+      glyphs
+    }, { silent: true }).id;
   }
+  // Every word that is about to be hidden goes into the box, a list marker
+  // included; the paragraph's own text has that taken off.
+  const text = PSExtract.buildRuns(para.lines).map((r) => r.text).join('') || para.text;
+  const first = para.lines[0];
+  // Room for a substitute face that runs a touch wider, on the side the text
+  // does not hang from.
+  const slack = para.align === 'justify' ? 0.5 : 2;
+  const x = para.align === 'right' ? para.x - slack : para.align === 'center' ? para.x - slack / 2 : para.x;
   const obj = addObject({
     type: 'text', pageIndex: index, fromPage: true,
-    x: para.x, y: para.y,
-    w: Math.max(40, para.w + 2),
+    x, y: para.y,
+    w: Math.max(12, para.w + slack),
     h: Math.max(para.size * 1.25, para.h),
-    text: para.text,
+    text,
     size: para.size,
     color: para.color || '#000000',
     bold: !!para.bold,
@@ -1912,13 +2386,109 @@ function liftParagraph(index, para, at) {
     family: familyFor(para),
     align: para.align || 'left',
     leading: para.leading || 1.2,
+    // How far below the top of the block its first baseline was.
+    rise: first ? first.baseline - para.y : undefined,
     origin: cleanFontName(para.font)
-  });
-  para.lifted = obj;
+  }, { silent: true });
+  para.liftedId = obj.id;
+  keepOriginalBreaks(obj, para);
+  commit();
+  refreshHiddenText();
   setTool('select');
   select(obj);
   startTextEdit(obj, at);
   return obj;
+}
+
+/**
+ * Make a lifted paragraph break its lines where the original did.
+ *
+ * The box is the width the paragraph was, but the stand-in face is not quite
+ * the width of the face it stands in for — and a phrase that was bold is now
+ * plain — so the browser may fit a word more, or a word fewer, on a line, and
+ * every line after it shifts. Lifting a paragraph to fix one letter should
+ * not rearrange it, so a few widths either side are tried and the first that
+ * reproduces the original breaks is kept. If none does the box stays as it
+ * was: the words still flow, just not where they used to.
+ */
+function keepOriginalBreaks(obj, para) {
+  if (para.lines.length < 2 || (obj.align !== 'left' && obj.align !== 'justify')) return;
+  const firstWord = (s) => s.trim().split(/\s+/)[0];
+  const want = para.lines.map((l) => firstWord(l.text));
+  const same = () => {
+    const got = domLines(obj);
+    return !!got && got.length === want.length && got.every((g, i) => firstWord(g.text) === want[i]);
+  };
+  if (same()) return;
+  const base = obj.w;
+  for (const f of [0.994, 1.006, 0.988, 1.012, 0.98, 1.02, 0.97, 1.03]) {
+    obj.w = base * f;
+    applyObjectLayout(obj);
+    if (same()) return;
+  }
+  obj.w = base;
+  applyObjectLayout(obj);
+}
+
+/* --------------------- hiding the words that were lifted --------------------- */
+/*
+ * A lifted paragraph's original words are not painted over on screen: they
+ * are left out of the page's picture altogether, so whatever was behind them
+ * — a tint, a rule, a photograph — is still there. pdf.js paints text a glyph
+ * at a time, and each glyph is checked against the boxes of what was lifted.
+ *
+ * Where that cannot be done — a font pdf.js draws as outlines rather than as
+ * text — too few glyphs are caught, and the cover falls back to showing its
+ * flat colour, which is what it did before.
+ */
+
+function hiddenCovers(idx) {
+  return state.objects.filter((o) => o.type === 'cover' && o.pageIndex === idx && o.erase && o.erase.length);
+}
+
+function hiddenTextKey(idx) {
+  const covers = hiddenCovers(idx);
+  return covers.length ? covers.map((o) => o.id).join(',') : '';
+}
+
+function applyHiddenText(canvas, idx, k) {
+  const covers = hiddenCovers(idx);
+  if (!covers.length) return;
+  const rects = [];
+  for (const c of covers) {
+    for (const r of c.erase) rects.push({ x0: r.x0 * k, x1: r.x1 * k, y0: r.y0 * k, y1: r.y1 * k, id: c.id });
+  }
+  const hits = new Map();
+  canvas.psHits = hits;
+  PSExtract.setTextRule(canvas, (ctx, x, y) => {
+    const m = ctx.getTransform();
+    const px = m.a * x + m.c * y + m.e, py = m.b * x + m.d * y + m.f;
+    for (const r of rects) {
+      if (px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1) {
+        hits.set(r.id, (hits.get(r.id) || 0) + 1);
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+function settleHiddenText(idx, canvas) {
+  const hits = canvas.psHits;
+  for (const c of hiddenCovers(idx)) {
+    const clean = !!hits && (hits.get(c.id) || 0) >= Math.max(1, (c.glyphs || 1) * 0.85);
+    if (!!c.clean !== clean) {
+      c.clean = clean;
+      syncObjectElement(c);
+    }
+  }
+}
+
+/** Redraw the pages whose set of hidden words has changed. */
+function refreshHiddenText() {
+  for (const p of state.pages) {
+    if (p.visible && p.renderedKey && renderKey(p) !== p.renderedKey) requestRender(p.index);
+  }
 }
 
 async function pickTextAt(pi, bx, by, at) {
@@ -1938,7 +2508,7 @@ async function markPageParagraphs(pi) {
   clearTextMarks(pi);
   const S = curScale();
   for (const para of list) {
-    if (para.lifted && state.objects.includes(para.lifted)) continue;
+    if (objectById(para.liftedId) || objectById(para.coverId)) continue;
     const el = document.createElement('div');
     el.className = 'txtpick';
     el.style.left = (para.x * S) + 'px';
@@ -1967,13 +2537,6 @@ function refreshTextMarks() {
   clearTextMarks();
   if (state.tool !== 'edittext') return;
   for (const p of state.pages) if (p.visible) markPageParagraphs(p.index);
-}
-
-/** Pages carrying an edit to text that was already in the document. */
-function editedTextPages() {
-  const set = new Set();
-  for (const o of state.objects) if (o.fromPage && o.type === 'text') set.add(o.pageIndex);
-  return Array.from(set).sort((a, b) => a - b);
 }
 
 async function onOverlayDoubleClick(ev, pi) {
@@ -2011,16 +2574,21 @@ function anchorFor(rot, box) {
   return [box.L, box.B];
 }
 
+/**
+ * Break text into lines no wider than `maxW`. Each line says whether it ended
+ * because it ran out of room (`soft`) or because the text said so — only the
+ * first kind is stretched when a paragraph is justified.
+ */
 function wrapLines(text, maxW, measure) {
   const out = [];
   for (const raw of String(text).split('\n')) {
-    if (!raw) { out.push(''); continue; }
+    if (!raw) { out.push({ text: '', soft: false }); continue; }
     const words = raw.split(/(\s+)/);
     let line = '';
     for (const w of words) {
       const cand = line + w;
       if (line && measure(cand) > maxW) {
-        out.push(line.trimEnd());
+        out.push({ text: line.trimEnd(), soft: true });
         line = w.trimStart();
       } else {
         line = cand;
@@ -2029,35 +2597,92 @@ function wrapLines(text, maxW, measure) {
       while (measure(line) > maxW && line.length > 1) {
         let cut = line.length - 1;
         while (cut > 1 && measure(line.slice(0, cut)) > maxW) cut--;
-        out.push(line.slice(0, cut));
+        out.push({ text: line.slice(0, cut), soft: true });
         line = line.slice(cut);
       }
     }
-    out.push(line.trimEnd());
+    out.push({ text: line.trimEnd(), soft: false });
   }
   return out;
 }
 
+/**
+ * The lines of a text box exactly as the browser has broken them.
+ *
+ * Working the breaks out again from the font's metrics gives the same answer
+ * nearly always, and a different one — a word on the wrong line, a paragraph
+ * a line longer than it looked — just often enough to matter. Reading them off
+ * the screen means the saved file has the lines the user was looking at.
+ * Returns null when the box is not laid out, and the metrics are used instead.
+ */
+function domLines(o) {
+  const t = o.el && o.el.querySelector('.txt');
+  if (!t || t.childNodes.length !== 1 || t.firstChild.nodeType !== 3 || !t.getClientRects().length) return null;
+  const node = t.firstChild;
+  const text = node.data;
+  if (text !== o.text || text.length > 20000) return null;
+  const step = parseFloat(getComputedStyle(t).fontSize) * 0.5 || 4;
+  const range = document.createRange();
+  const out = [];
+  let start = 0;
+  let top = null;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\n') {
+      out.push({ text: text.slice(start, i), soft: false });
+      start = i + 1;
+      top = null;
+      continue;
+    }
+    range.setStart(node, i);
+    range.setEnd(node, i + 1);
+    const rects = range.getClientRects();
+    if (!rects.length) continue;
+    const y = rects[0].top;
+    if (top != null && y > top + step) {
+      out.push({ text: text.slice(start, i), soft: true });
+      start = i;
+    }
+    top = y;
+  }
+  out.push({ text: text.slice(start), soft: false });
+  for (const line of out) line.text = line.text.replace(/\s+$/, '');
+  return out;
+}
+
+/**
+ * A pen stroke as one path of curves through the midpoints of its samples —
+ * the same curve the screen draws — rather than a chain of straight pieces,
+ * each stroked on its own. One path is smaller, and it is the line that was
+ * drawn.
+ */
 function drawInkToPdf(page, vp1, o) {
   const col = hexToRgb01(o.color);
-  const pts = o.points;
+  const pts = o.points.map((p) => vp1.convertToPdfPoint(p.x, p.y));
   if (pts.length === 1) {
-    const c = vp1.convertToPdfPoint(pts[0].x, pts[0].y);
-    page.drawCircle({ x: c[0], y: c[1], size: Math.max(0.4, o.size / 2), color: col });
+    page.drawCircle({ x: pts[0][0], y: pts[0][1], size: Math.max(0.4, o.size / 2), color: col });
     return;
   }
-  let prev = vp1.convertToPdfPoint(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) {
-    const cur = vp1.convertToPdfPoint(pts[i].x, pts[i].y);
-    page.drawLine({
-      start: { x: prev[0], y: prev[1] },
-      end: { x: cur[0], y: cur[1] },
-      thickness: o.size,
-      color: col,
-      lineCap: LineCapStyle.Round
-    });
-    prev = cur;
+  const P = PDFLib;
+  const ops = [
+    P.pushGraphicsState(), P.setStrokingColor(col), P.setLineWidth(o.size),
+    P.setLineCap(LineCapStyle.Round), P.setLineJoin(LineJoinStyle.Round),
+    P.moveTo(pts[0][0], pts[0][1])
+  ];
+  let cx = pts[0][0], cy = pts[0][1];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const qx = pts[i][0], qy = pts[i][1];
+    const ex = (qx + pts[i + 1][0]) / 2, ey = (qy + pts[i + 1][1]) / 2;
+    // A quadratic curve, written as the cubic a PDF has.
+    ops.push(P.appendBezierCurve(
+      cx + (qx - cx) * 2 / 3, cy + (qy - cy) * 2 / 3,
+      ex + (qx - ex) * 2 / 3, ey + (qy - ey) * 2 / 3,
+      ex, ey
+    ));
+    cx = ex; cy = ey;
   }
+  const last = pts[pts.length - 1];
+  ops.push(P.lineTo(last[0], last[1]), P.stroke(), P.popGraphicsState());
+  for (let i = 0; i < ops.length; i += 400) page.pushOperators(...ops.slice(i, i + 400));
 }
 
 function drawShapeToPdf(page, vp1, o) {
@@ -2134,31 +2759,94 @@ function alignOffset(align, avail, lineWidth) {
   return 0;
 }
 
+/*
+ * The faces a text box is shown in. Each is the browser's counterpart of the
+ * standard PDF font the saved file will use — Arial for Helvetica, Times New
+ * Roman for Times, Courier New for Courier — and each pair shares its letter
+ * widths, so a line that fits on screen fits in the file.
+ */
 const CSS_FAMILY = {
-  serif: 'Times New Roman, Times, serif',
-  mono: 'Consolas, Courier New, monospace',
+  serif: '"Times New Roman", Times, serif',
+  mono: '"Courier New", Courier, monospace',
   sans: 'Helvetica, Arial, sans-serif'
 };
+
+/**
+ * How far below the top of a text box the browser puts its first baseline, as
+ * a multiple of the type size. It depends on the face's own metrics and on the
+ * line height, so it is measured once for each combination rather than
+ * assumed.
+ */
+const baselineRatios = new Map();
+
+function domBaselineRatio(o) {
+  const family = CSS_FAMILY[o.family] || CSS_FAMILY.sans;
+  const leading = o.leading || 1.25;
+  const key = family + '|' + (o.bold ? 'b' : '') + (o.italic ? 'i' : '') + '|' + leading;
+  let ratio = baselineRatios.get(key);
+  if (ratio == null) {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;white-space:pre;' +
+      'font-size:100px;line-height:' + leading + ';font-family:' + family +
+      ';font-weight:' + (o.bold ? 700 : 400) + ';font-style:' + (o.italic ? 'italic' : 'normal');
+    // An empty inline block sits with its bottom edge on the baseline.
+    const mark = document.createElement('span');
+    mark.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+    probe.appendChild(mark);
+    probe.appendChild(document.createTextNode('Hxg'));
+    document.body.appendChild(probe);
+    ratio = (mark.getBoundingClientRect().bottom - probe.getBoundingClientRect().top) / 100;
+    probe.remove();
+    if (!(ratio > 0.3 && ratio < 3)) ratio = 0.9;
+    baselineRatios.set(key, ratio);
+  }
+  return ratio;
+}
+
+/** Where a text box's first baseline is, in points below its top. */
+function textRise(o) {
+  return o.rise != null ? o.rise : domBaselineRatio(o) * o.size;
+}
+
+/** Draw one line, spreading its words to the full width when it is justified. */
+function placeLine(line, align, avail, width, put) {
+  const text = line.text.replace(/\t/g, '    ');
+  if (!text) return;
+  const words = text.trim().split(/\s+/);
+  if (align === 'justify' && line.soft && words.length > 1) {
+    const used = words.reduce((n, w) => n + width(w), 0);
+    const gap = (avail - used) / (words.length - 1);
+    // A line that would need absurd gaps was never a full line.
+    if (gap > 0 && gap < width('m') * 3) {
+      let x = 0;
+      for (const w of words) { put(w, x); x += width(w) + gap; }
+      return;
+    }
+  }
+  put(text, alignOffset(align, avail, width(text)));
+}
 
 async function drawTextToPdf(srcDoc, page, fonts, vp1, rot, o) {
   const color = hexToRgb01(o.color);
   const size = o.size;
   const lh = size * (o.leading || 1.25);
+  const rise = textRise(o);
+  const avail = Math.max(8, o.w);
   const font = await fonts.for(o.family || 'sans', o.bold, o.italic);
+  const shown = domLines(o);
   let vector = rot === 0;
   if (vector) {
-    try { font.widthOfTextAtSize(o.text.replace(/\n/g, ' '), size); }
+    try { font.widthOfTextAtSize(o.text.replace(/\s+/g, ' '), size); }
     catch (e) { vector = false; }
   }
   if (vector) {
-    const avail = Math.max(8, o.w - 2);
-    const lines = wrapLines(o.text, avail, (s2) => font.widthOfTextAtSize(s2, size));
+    const width = (s2) => font.widthOfTextAtSize(s2, size);
+    const lines = shown || wrapLines(o.text, avail, width);
     const b = pdfBox(vp1, o.x, o.y, o.w, o.h);
-    const asc = size * 0.8;
     lines.forEach((ln, i) => {
-      if (!ln) return;
-      const dx = alignOffset(o.align, avail, font.widthOfTextAtSize(ln, size));
-      page.drawText(ln, { x: b.L + 1 + dx, y: b.T - asc - i * lh, size, font, color });
+      placeLine(ln, o.align, avail, width, (text, dx) => {
+        page.drawText(text, { x: b.L + dx, y: b.T - rise - i * lh, size, font, color });
+      });
     });
     return;
   }
@@ -2169,24 +2857,25 @@ async function drawTextToPdf(srcDoc, page, fonts, vp1, rot, o) {
   const SC = 3;
   const mc = document.createElement('canvas');
   let mctx = mc.getContext('2d');
-  const weight = (o.bold ? '700 ' : '') + (o.italic ? 'italic ' : '');
+  const weight = (o.italic ? 'italic ' : '') + (o.bold ? '700 ' : '');
   const fontCss = weight + (size * SC) + 'px ' + (CSS_FAMILY[o.family] || CSS_FAMILY.sans);
   mctx.font = fontCss;
-  const avail = Math.max(8, o.w - 2);
-  const lines = wrapLines(o.text, avail, (s2) => mctx.measureText(s2).width / SC);
-  const hUnits = Math.max(lh, lines.length * lh);
+  const width = (s2) => mctx.measureText(s2).width / SC;
+  const lines = shown || wrapLines(o.text, avail, width);
+  const hUnits = Math.max(lh, rise + (lines.length - 1) * lh + size * 0.4);
   mc.width = Math.max(2, Math.ceil(o.w * SC));
   mc.height = Math.max(2, Math.ceil(hUnits * SC));
   mctx = mc.getContext('2d');
   mctx.font = fontCss;
   mctx.fillStyle = o.color;
-  mctx.textBaseline = 'top';
+  mctx.textBaseline = 'alphabetic';
   lines.forEach((ln, i) => {
-    if (!ln) return;
-    const dx = alignOffset(o.align, avail, mctx.measureText(ln).width / SC);
-    mctx.fillText(ln, (1 + dx) * SC, (i * lh + size * 0.1) * SC);
+    placeLine(ln, o.align, avail, width, (text, dx) => {
+      mctx.fillText(text, dx * SC, (rise + i * lh) * SC);
+    });
   });
   const img = await srcDoc.embedPng(mc.toDataURL('image/png'));
+  PSExtract.releaseCanvas(mc);
   const b = pdfBox(vp1, o.x, o.y, o.w, hUnits);
   const anchor = anchorFor(rot, b);
   page.drawImage(img, { x: anchor[0], y: anchor[1], width: o.w, height: hUnits, rotate: degrees(rot) });
@@ -2224,7 +2913,12 @@ async function exportAnnotated(opts) {
     );
   }
   const o = Object.assign({ applyRedactions: true, redactDpi: 200 }, opts);
-  const srcDoc = await PDFDocument.load(state.bytes, { ignoreEncryption: true });
+  flushCommit();
+  // Nothing has been added, so there is nothing to bake in: the document is
+  // itself, byte for byte, and reading it in and writing it out again would
+  // only cost time.
+  if (!state.objects.length) return state.bytes;
+  const srcDoc = await PDFDocument.load(state.bytes, PDF_LOAD);
   // Only the fourteen standard fonts can be embedded without a font toolkit,
   // so a lifted paragraph is matched by kind — serif, monospace or sans — and
   // by weight and slope, rather than by the name it carried in the document.
@@ -2245,14 +2939,15 @@ async function exportAnnotated(opts) {
     fontCache.set(key, f);
     return f;
   };
-  const fonts = {
-    regular: await fontFor('sans', false, false),
-    bold: await fontFor('sans', true, false),
-    italic: await fontFor('sans', false, true),
-    boldItalic: await fontFor('sans', true, true),
-    for: fontFor
-  };
+  // Fonts are embedded as they are first asked for; one that is never used
+  // is never written into the file.
+  const fonts = { for: fontFor };
   const pdfPages = srcDoc.getPages();
+
+  // The words of every lifted paragraph come out of the page first, before
+  // anything is drawn on it. `erased` holds the covers this worked for; they
+  // have nothing left to cover.
+  const erased = await eraseLiftedText(srcDoc, pdfPages);
   const imgCache = new Map();
   const embed = async (url) => {
     if (imgCache.has(url)) return imgCache.get(url);
@@ -2264,6 +2959,7 @@ async function exportAnnotated(opts) {
   };
 
   const redactBoxes = {};
+  const coveredText = new Set();   // pages whose old words are only painted over
   for (const obj of state.objects) {
     const page = pdfPages[obj.pageIndex];
     const pinfo = state.pages[obj.pageIndex];
@@ -2274,6 +2970,8 @@ async function exportAnnotated(opts) {
     if (obj.type === 'ink') {
       drawInkToPdf(page, vp1, obj);
     } else if (obj.type === 'cover') {
+      if (erased.has(obj.id)) continue;
+      if (obj.erase) coveredText.add(obj.pageIndex);
       const b = pdfBox(vp1, obj.x, obj.y, obj.w, obj.h);
       page.drawRectangle({
         x: b.L, y: b.B, width: b.R - b.L, height: b.T - b.B,
@@ -2289,16 +2987,18 @@ async function exportAnnotated(opts) {
         .push({ x: obj.x, y: obj.y, w: obj.w, h: obj.h, color: '#000000' });
     } else if (obj.type === 'highlight') {
       const b = pdfBox(vp1, obj.x, obj.y, obj.w, obj.h);
+      // Multiplied onto the page, as on screen: the text under a highlight
+      // stays black instead of being washed out by a film of colour.
       page.drawRectangle({
         x: b.L, y: b.B, width: b.R - b.L, height: b.T - b.B,
-        color: hexToRgb01(obj.color), opacity: obj.opacity
+        color: hexToRgb01(obj.color), opacity: obj.opacity, blendMode: BlendMode.Multiply
       });
     } else if (obj.type === 'shape') {
       drawShapeToPdf(page, vp1, obj);
     } else if (obj.type === 'note') {
       addNoteAnnotation(srcDoc, page, vp1, obj);
     } else if (obj.type === 'stamp') {
-      drawStampToPdf(page, fonts.bold, vp1, rot, obj);
+      drawStampToPdf(page, await fontFor('sans', true, false), vp1, rot, obj);
     } else if (obj.type === 'image' || obj.type === 'sig') {
       const img = await embed(obj.url);
       const b = pdfBox(vp1, obj.x, obj.y, obj.w, obj.h);
@@ -2309,19 +3009,33 @@ async function exportAnnotated(opts) {
     }
   }
 
-  let bytes = await srcDoc.save({ useObjectStreams: true });
-
-  // Redaction and editing the document's own text both need the page turned
-  // into a picture. Covering something does not remove it: the redacted content
-  // and the words that were replaced are still in the byte stream underneath,
-  // recoverable by any reader that looks. Re-rendering is what removes them.
+  /*
+   * Covering something does not remove it: what is under a redaction, and any
+   * replaced words that could not be taken out of the page above, are still in
+   * the byte stream, recoverable by any reader that looks. Those pages are
+   * re-rendered as pictures, which is what removes them.
+   */
   const burnIn = new Set();
   if (o.applyRedactions !== false) {
     for (const k of Object.keys(redactBoxes)) burnIn.add(Number(k));
   }
   if (o.flattenEdits !== false) {
-    for (const i of editedTextPages()) burnIn.add(i);
+    for (const i of coveredText) burnIn.add(i);
   }
+  if (burnIn.size && o.confirmRaster) {
+    const go = await o.confirmRaster({
+      pages: Array.from(burnIn).sort((a, b) => a - b).map((i) => i + 1),
+      redactions: Object.keys(redactBoxes).length > 0,
+      text: coveredText.size > 0
+    });
+    if (!go) {
+      const stop = new Error('Cancelled');
+      stop.name = 'ExportCancelled';
+      throw stop;
+    }
+  }
+
+  let bytes = await srcDoc.save(PDF_SAVE);
   if (burnIn.size) {
     bytes = await PSDocOps.rasterizePages(bytes, {
       pages: Array.from(burnIn).sort((a, b) => a - b),
@@ -2333,35 +3047,106 @@ async function exportAnnotated(opts) {
   return bytes;
 }
 
+/**
+ * Take the original words of every lifted paragraph out of their pages.
+ *
+ * Each page is rewritten, the document is written out once and read back, and
+ * every rewritten page is checked glyph by glyph against what it was meant to
+ * become. A page that passes keeps the change; one that does not is put back
+ * exactly as it was, and its covers fall back to painting over the words and
+ * having the page re-rendered — the way it was always done before.
+ *
+ * Returns the ids of the covers whose words are really gone.
+ */
+async function eraseLiftedText(srcDoc, pdfPages) {
+  const done = new Set();
+  if (typeof PSContentEdit === 'undefined') return done;
+  const byPage = new Map();
+  for (const obj of state.objects) {
+    if (obj.type !== 'cover' || !obj.erase || !obj.erase.length) continue;
+    if (!byPage.has(obj.pageIndex)) byPage.set(obj.pageIndex, []);
+    byPage.get(obj.pageIndex).push(obj);
+  }
+  if (!byPage.size) return done;
+
+  const plans = [];
+  for (const [index, covers] of byPage) {
+    const pinfo = state.pages[index];
+    const page = pdfPages[index];
+    if (!pinfo || !page) continue;
+    try {
+      const rects = [];
+      for (const c of covers) for (const r of c.erase) rects.push(r);
+      const plan = await PSContentEdit.erase(srcDoc, page, pinfo.page, rects);
+      if (plan) plans.push({ index, covers, plan });
+    } catch (err) { /* this page falls back */ }
+  }
+  if (!plans.length) return done;
+
+  let check = null;
+  try {
+    const bytes = await srcDoc.save(PDF_SAVE);
+    check = await pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise;
+    for (const p of plans) {
+      let ok = false;
+      try {
+        ok = await PSContentEdit.verify(await check.getPage(p.index + 1), p.plan);
+      } catch (err) { ok = false; }
+      if (ok) {
+        p.plan.commit();
+        for (const c of p.covers) done.add(c.id);
+      } else {
+        p.plan.revert();
+      }
+    }
+  } catch (err) {
+    for (const p of plans) { try { p.plan.revert(); } catch (e) { /* already back */ } }
+    done.clear();
+  } finally {
+    if (check) { try { check.destroy(); } catch (e) { /* ignore */ } }
+  }
+  return done;
+}
+
+function describeRaster(info) {
+  const pages = info.pages.length === 1 ? 'Page ' + info.pages[0] : 'Pages ' + info.pages.join(', ');
+  const will = info.pages.length === 1 ? ' will be saved as a picture.' : ' will be saved as pictures.';
+  const why = info.redactions && info.text
+    ? 'That is what makes a redaction permanent, and on some of these pages the words you ' +
+      'replaced could not be taken out any other way.'
+    : info.redactions
+      ? 'That is what makes a redaction permanent: what is under the box stops existing, ' +
+        'rather than sitting beneath it.'
+      : 'The words you replaced there could not be taken out of the page cleanly, and ' +
+        'painting over them would leave them in the file.';
+  return pages + will + ' ' + why + ' Text on ' +
+    (info.pages.length === 1 ? 'that page' : 'those pages') +
+    ' will no longer be selectable, and the file will be larger.';
+}
+
 btnDownload.addEventListener('click', async () => {
-  if (!state.doc) return;
+  if (!state.doc || btnDownload.disabled) return;
   const orig = btnDownload.textContent;
   btnDownload.disabled = true;
   btnDownload.textContent = 'Preparing…';
   try {
-    const hasRedactions = state.objects.some((o) => o.type === 'redact');
-    const editedPages = editedTextPages();
-    const subject = hasRedactions && editedPages.length
-      ? 'This document has redactions, and text you edited in place.'
-      : hasRedactions
-        ? 'This document has redactions.'
-        : 'You have edited text that was already in this document.';
-    if ((hasRedactions || editedPages.length) && !window.confirm(
-      subject + '\n\nThose pages will be re-rendered as images, so the covered and ' +
-      'replaced words genuinely stop existing rather than sitting under a box. Text ' +
-      'on those pages stops being selectable, and the file gets larger.\n\nContinue?'
-    )) {
-      btnDownload.textContent = orig;
-      btnDownload.disabled = false;
-      return;
-    }
-    const bytes = await exportAnnotated();
-    downloadBytes(bytes, suffixName(state.name, state.objects.length ? '-edited' : ''));
+    const edited = state.objects.length > 0;
+    const bytes = await exportAnnotated({
+      confirmRaster: (info) => confirmDialog({
+        title: info.pages.length === 1 ? 'One page will become a picture' : 'Some pages will become pictures',
+        text: describeRaster(info),
+        ok: 'Save'
+      })
+    });
+    downloadBytes(bytes, suffixName(state.name, edited ? '-edited' : ''));
+    state.dirty = false;
   } catch (err) {
-    showBanner('Export failed: ' + ((err && err.message) || err));
+    if (!(err && err.name === 'ExportCancelled')) {
+      showBanner('Export failed: ' + ((err && err.message) || err));
+    }
   }
   btnDownload.textContent = orig;
-  btnDownload.disabled = false;
+  btnDownload.disabled = state.locked;
 });
 
 /* ============================== search ============================== */
@@ -2454,7 +3239,7 @@ async function runSearch(term, matchCase) {
       }
     }
     $('#search-count').textContent = hits.length + ' so far…';
-    await new Promise((r) => setTimeout(r, 0));
+    await PSExtract.tick();
     if (run !== searchRun) return;
   }
 
@@ -2563,6 +3348,20 @@ for (const b of toolBtns) {
   });
 }
 
+/*
+ * Each control sets what the next mark of its kind will look like, and — when
+ * a mark of that kind is selected — changes that mark too. `change` runs on
+ * the selected object and reports whether it applied.
+ */
+function applyToSelection(type, change) {
+  const sel = state.selection;
+  if (!sel || sel.type !== type) return;
+  change(sel);
+  syncObjectElement(sel);
+  applyObjectLayout(sel);
+  commitSoon();
+}
+
 textSizeInput.addEventListener('input', () => {
   // parseFloat, not parseInt: text lifted off a page is very often a fractional
   // size such as 10.8pt, and truncating it changed the size the moment the box
@@ -2572,51 +3371,69 @@ textSizeInput.addEventListener('input', () => {
   if (!isFinite(raw)) return;
   const v = clamp(raw, 6, 144);
   state.textDefaults.size = v;
-  const sel = state.selection;
-  if (sel && sel.type === 'text') { sel.size = v; applyObjectLayout(sel); }
+  applyToSelection('text', (sel) => {
+    // The first baseline was measured for the old size; let it follow the new.
+    if (sel.rise != null && sel.size > 0) sel.rise = sel.rise * (v / sel.size);
+    sel.size = v;
+  });
 });
 textColorInput.addEventListener('input', () => {
   state.textDefaults.color = textColorInput.value;
-  const sel = state.selection;
-  if (sel && sel.type === 'text') { sel.color = textColorInput.value; applyObjectLayout(sel); }
+  applyToSelection('text', (sel) => { sel.color = textColorInput.value; });
 });
 textBoldInput.addEventListener('change', () => {
   state.textDefaults.bold = textBoldInput.checked;
-  const sel = state.selection;
-  if (sel && sel.type === 'text') { sel.bold = textBoldInput.checked; applyObjectLayout(sel); }
+  applyToSelection('text', (sel) => { sel.bold = textBoldInput.checked; });
 });
-textFamilyInput.addEventListener('change', () => {
-  const sel = state.selection;
-  if (sel && sel.type === 'text') {
-    sel.family = textFamilyInput.value;
-    applyObjectLayout(sel);
-  }
-});
-
 textItalicInput.addEventListener('change', () => {
   state.textDefaults.italic = textItalicInput.checked;
-  const sel = state.selection;
-  if (sel && sel.type === 'text') { sel.italic = textItalicInput.checked; applyObjectLayout(sel); }
+  applyToSelection('text', (sel) => { sel.italic = textItalicInput.checked; });
 });
+textFamilyInput.addEventListener('change', () => {
+  state.textDefaults.family = textFamilyInput.value;
+  applyToSelection('text', (sel) => { sel.family = textFamilyInput.value; });
+});
+
 penSizeInput.addEventListener('input', () => {
   state.pen.size = parseFloat(penSizeInput.value) || 3;
 });
 penColorInput.addEventListener('input', () => {
   state.pen.color = penColorInput.value;
 });
-hlColorInput.addEventListener('change', () => { state.highlight.color = hlColorInput.value; });
+
+hlColorInput.addEventListener('change', () => {
+  state.highlight.color = hlColorInput.value;
+  applyToSelection('highlight', (sel) => { sel.color = hlColorInput.value; });
+});
 hlOpacityInput.addEventListener('input', () => {
   state.highlight.opacity = (parseInt(hlOpacityInput.value, 10) || 38) / 100;
+  applyToSelection('highlight', (sel) => { sel.opacity = state.highlight.opacity; });
 });
-shapeKindInput.addEventListener('change', () => { state.shape.kind = shapeKindInput.value; });
-shapeStrokeInput.addEventListener('input', () => { state.shape.stroke = shapeStrokeInput.value; });
+
+shapeKindInput.addEventListener('change', () => {
+  state.shape.kind = shapeKindInput.value;
+  applyToSelection('shape', (sel) => { sel.kind = shapeKindInput.value; });
+});
+shapeStrokeInput.addEventListener('input', () => {
+  state.shape.stroke = shapeStrokeInput.value;
+  applyToSelection('shape', (sel) => { sel.stroke = shapeStrokeInput.value; });
+});
 shapeWidthInput.addEventListener('input', () => {
   state.shape.width = parseFloat(shapeWidthInput.value) || 2;
+  applyToSelection('shape', (sel) => { sel.width = state.shape.width; });
 });
-shapeFillInput.addEventListener('input', () => { state.shape.fill = shapeFillInput.value; });
-shapeFilledInput.addEventListener('change', () => { state.shape.filled = shapeFilledInput.checked; });
+shapeFillInput.addEventListener('input', () => {
+  state.shape.fill = shapeFillInput.value;
+  applyToSelection('shape', (sel) => { sel.fill = shapeFillInput.value; });
+});
+shapeFilledInput.addEventListener('change', () => {
+  state.shape.filled = shapeFilledInput.checked;
+  applyToSelection('shape', (sel) => { sel.filled = shapeFilledInput.checked; });
+});
 
 btnUndoStroke.addEventListener('click', undo);
+if (btnUndo) btnUndo.addEventListener('click', undo);
+if (btnRedo) btnRedo.addEventListener('click', redo);
 btnDeleteObj.addEventListener('click', () => {
   if (state.selection) deleteObject(state.selection.id);
 });
@@ -2630,20 +3447,157 @@ pdfInput.addEventListener('change', () => {
   handleNewFile(f);
 });
 
+/* ============================== dialogs ============================== */
+
+/*
+ * Questions are asked in the page rather than with the browser's own confirm
+ * and prompt boxes. Those freeze the whole tab while they are up, cannot be
+ * styled or given a sensible button label, and a note typed into prompt() is
+ * one line that cannot be broken.
+ *
+ * ask() resolves to true or false, or — with `input` — to the text entered,
+ * or null if the question was dismissed.
+ */
+let askOpen = null;
+
+function ask(opts) {
+  const o = Object.assign({ title: '', text: '', ok: 'OK', cancel: 'Cancel', danger: false, input: null }, opts);
+  if (askOpen) askOpen(o.input ? null : false);
+  return new Promise((resolve) => {
+    const field = $('#ask-input');
+    const okBtn = $('#ask-ok');
+    const cancelBtn = $('#ask-cancel');
+    $('#ask-title').textContent = o.title;
+    $('#ask-text').textContent = o.text;
+    $('#ask-text').classList.toggle('hidden', !o.text);
+    okBtn.textContent = o.ok;
+    cancelBtn.textContent = o.cancel;
+    okBtn.classList.toggle('danger-btn', !!o.danger);
+    field.classList.toggle('hidden', !o.input);
+    if (o.input) field.value = o.input.value || '';
+    openModal(askModal);
+    setTimeout(() => (o.input ? field : okBtn).focus(), 30);
+
+    const finish = (value) => {
+      askOpen = null;
+      closeModal(askModal);
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      document.removeEventListener('keydown', onKey, true);
+      resolve(value);
+    };
+    const onOk = () => finish(o.input ? field.value : true);
+    const onCancel = () => finish(o.input ? null : false);
+    // Captured ahead of the page's own shortcuts, so a letter typed into a
+    // note does not pick a tool, and Escape answers the question.
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel(); return; }
+      if (e.key === 'Enter' && (!o.input || e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        e.stopPropagation();
+        onOk();
+        return;
+      }
+      e.stopPropagation();
+    };
+    askOpen = finish;
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onKey, true);
+  });
+}
+
+function confirmDialog(opts) {
+  return ask(opts);
+}
+
+function textDialog(opts) {
+  return ask(Object.assign({}, opts, { input: { value: (opts && opts.value) || '' } }));
+}
+
+/* ============================== leaving ============================== */
+
+// Closing the tab, or following a link out of it, throws away every edit that
+// has not been saved. The browser asks first — in its own words; a page is not
+// allowed to supply them.
+window.addEventListener('beforeunload', (e) => {
+  if (!state.dirty) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
 /* ============================== drag & drop ============================== */
 
-viewerEl.addEventListener('dragover', (e) => {
+/*
+ * A file dropped anywhere in the window is taken, not only one dropped on the
+ * pages. Left to the browser, a PDF let go over the toolbar opens in place of
+ * the editor and takes the work in it along.
+ */
+const OFFICE_FILE = /\.(docx|xlsx|xls|csv)$/i;
+const TEXT_FILE = /\.(txt|md|log)$/i;
+
+function draggingFiles(e) {
+  const types = e.dataTransfer && e.dataTransfer.types;
+  return !!types && Array.from(types).includes('Files');
+}
+
+window.addEventListener('dragover', (e) => {
+  if (!draggingFiles(e)) return;
   e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
   viewerEl.classList.add('drag');
 });
-viewerEl.addEventListener('dragleave', () => viewerEl.classList.remove('drag'));
-viewerEl.addEventListener('drop', (e) => {
+window.addEventListener('dragleave', (e) => {
+  if (!e.relatedTarget) viewerEl.classList.remove('drag');
+});
+window.addEventListener('drop', (e) => {
+  if (!draggingFiles(e)) return;
   e.preventDefault();
   viewerEl.classList.remove('drag');
-  const f = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f && (/\.pdf$/i.test(f.name) || f.type === 'application/pdf')) handleNewFile(f);
-  else if (f) showBanner('That does not look like a PDF file.');
+  const files = Array.from(e.dataTransfer.files || []);
+  if (files.length) handleDroppedFiles(files);
 });
+
+async function handleDroppedFiles(files) {
+  const first = files[0];
+  if (/\.pdf$/i.test(first.name) || first.type === 'application/pdf') {
+    handleNewFile(first);
+    return;
+  }
+  // Anything else that can become a PDF is made into one and opened.
+  const images = files.filter((f) => /^image\//.test(f.type));
+  let make = null;
+  if (images.length) {
+    make = () => PSConvert.imagesToPdf(images, { filename: images.length === 1 ? images[0].name : 'images' });
+  } else if (/\.docx$/i.test(first.name)) {
+    make = () => PSConvert.docxToPdf(first, {});
+  } else if (OFFICE_FILE.test(first.name)) {
+    make = () => PSConvert.spreadsheetToPdf(first, {});
+  } else if (TEXT_FILE.test(first.name) || first.type === 'text/plain') {
+    make = async () => PSConvert.textToPdf(await first.text(), { filename: first.name });
+  }
+  if (!make) {
+    showBanner('That file cannot be opened here. Drop a PDF, a picture, a Word document, ' +
+               'a spreadsheet or a text file.');
+    return;
+  }
+  if (state.doc && state.dirty && !(await confirmDialog({
+    title: 'Open another document?',
+    text: 'The changes you have not saved in this one will be lost.',
+    ok: 'Open it',
+    danger: true
+  }))) return;
+  setMeta('Making a PDF…');
+  try {
+    const res = await make();
+    await loadBytes(res.bytes, res.filename, { dirty: true });
+    showBanner('Made a PDF from ' + (images.length > 1 ? images.length + ' pictures' : first.name) +
+               '. Use "Save PDF" to keep it.', 'ok');
+  } catch (err) {
+    showBanner('Could not make a PDF from that file. ' + ((err && err.message) || ''));
+    setMeta(state.doc ? metaText() : 'No document loaded');
+  }
+}
 
 /* ============================== keyboard ============================== */
 
@@ -2654,10 +3608,12 @@ const SHORTCUTS = [
   ['P', 'Edit a picture already in the document'],
   ['E', 'Edit text already in the document'],
   ['Ctrl + O', 'Open a PDF'], ['Ctrl + S', 'Save the PDF'], ['Ctrl + F', 'Find in document'],
-  ['Ctrl + Z', 'Undo the last addition'], ['Ctrl + D', 'Duplicate the selection'],
+  ['Ctrl + Z', 'Undo'], ['Ctrl + Shift + Z', 'Redo'], ['Ctrl + D', 'Duplicate the selection'],
+  ['Arrow keys', 'Nudge the selection (Shift: further)'],
   ['Delete', 'Remove the selection'], ['Esc', 'Cancel / deselect'],
   ['F4', 'Show or hide the side panel'], ['F5', 'Presentation mode'],
   ['Ctrl + +', 'Zoom in'], ['Ctrl + −', 'Zoom out'], ['Ctrl + 0', 'Fit width'],
+  ['Ctrl + wheel', 'Zoom about the pointer'],
   ['Page Up / Down', 'Previous / next page'], ['?', 'This list']
 ];
 
@@ -2686,7 +3642,7 @@ document.addEventListener('keydown', (e) => {
 
   if (e.key === 'Escape') {
     if (state.present) { setPresent(false); return; }
-    if (openModalEl && openModalEl !== pwModal) { closeModal(openModalEl); return; }
+    if (openModalEl && openModalEl !== pwModal && openModalEl !== askModal) { closeModal(openModalEl); return; }
     if (typing) { t.blur(); return; }
     clearSelection();
     setTool('select');
@@ -2705,7 +3661,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (mod && (e.key === '+' || e.key === '=')) { e.preventDefault(); setZoom(state.zoom * 1.15); return; }
   if (mod && e.key === '-') { e.preventDefault(); setZoom(state.zoom / 1.15); return; }
-  if (mod && e.key === '0') { e.preventDefault(); updateFitScale(); setZoom(1); return; }
+  if (mod && e.key === '0') { e.preventDefault(); fitWidth(); return; }
 
   if (typing) {
     if (e.key === 'Enter' && t.id === 'search-input') {
@@ -2725,13 +3681,28 @@ document.addEventListener('keydown', (e) => {
     deleteObject(state.selection.id);
     return;
   }
-  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+  if (mod && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) redo(); else undo();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod && e.key.toLowerCase() === 'd') {
     e.preventDefault();
     duplicateObject(state.selection);
     return;
   }
   if (!state.doc) return;
+
+  if (state.selection && !mod && /^Arrow/.test(e.key)) {
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    nudgeSelection(
+      e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0,
+      e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
+    );
+    return;
+  }
 
   if (e.key === 'PageDown') { e.preventDefault(); goToPage(state.currentPage + 1); return; }
   if (e.key === 'PageUp') { e.preventDefault(); goToPage(state.currentPage - 1); return; }
@@ -2792,7 +3763,11 @@ window.PS = {
   curScale,
   layoutAll,
   renderPage,
-  askPassword
+  askPassword,
+  confirmDialog,
+  textDialog,
+  undo,
+  redo
 };
 
 /* ============================== boot ============================== */
