@@ -66,18 +66,22 @@ PowerPoint — entirely offline, on your own machine.
 > Tip: to edit PDFs opened from your own disk (file:// addresses), enable
 > "Allow access to file URLs" on the extension's Details page.
 
-## Graphic assets (to prepare)
+## Graphic assets
 
-| Asset | Size | Required |
+All in `store/`, 24-bit PNG without alpha, at the exact sizes the store asks
+for. The screenshots are of the extension itself, running on a sample document
+written for the purpose (the "Larkspur Garden Trust" is fictional).
+
+| Dashboard field | File | Size |
 | --- | --- | --- |
-| Store icon | 128 × 128 PNG | Yes — use `icons/icon128.png` |
-| Screenshots | 1280 × 800 or 640 × 400, 1–5 | Yes, at least one |
-| Small promo tile | 440 × 280 | Yes |
-| Marquee promo tile | 1400 × 560 | No |
-
-Suggested screenshots: the editor with a document open and the tool rail
-visible; text editing on an existing page; the Tools drawer converting to Word;
-the page organiser; the Ctrl+K palette; dark theme.
+| Store icon | `icons/icon128.png` | 128 × 128 |
+| Screenshot 1 | `store/screenshot-1-annotate.png` — highlight, stamp, note | 1280 × 800 |
+| Screenshot 2 | `store/screenshot-2-edit-text.png` — editing a paragraph in place | 1280 × 800 |
+| Screenshot 3 | `store/screenshot-3-convert.png` — Tools drawer, convert to Word | 1280 × 800 |
+| Screenshot 4 | `store/screenshot-4-command-palette.png` — Ctrl+K | 1280 × 800 |
+| Screenshot 5 | `store/screenshot-5-dark-find.png` — dark theme, find | 1280 × 800 |
+| Small promo tile | `store/promo-small-440x280.png` | 440 × 280 |
+| Marquee promo tile | `store/promo-marquee-1400x560.png` (optional) | 1400 × 560 |
 
 ## Privacy practices tab
 
