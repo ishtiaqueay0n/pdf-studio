@@ -33,6 +33,7 @@ function setProgress(done, total, label) {
   hubProgress.classList.remove('hidden');
   const pct = total ? Math.round((done / total) * 100) : 0;
   hubBar.style.width = Math.max(2, Math.min(100, pct)) + '%';
+  hubBar.parentNode.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, pct))));
   hubText.textContent = label || (done + ' / ' + total);
 }
 
@@ -89,8 +90,8 @@ async function runJob(button, label, fn, opts) {
     showBanner('Something is still running — wait for it to finish, or cancel it.', 'info');
     return;
   }
-  const original = button ? button.textContent : '';
-  if (button) { button.disabled = true; button.textContent = 'Working…'; }
+  const original = button ? PS.buttonLabel(button) : '';
+  if (button) { button.disabled = true; PS.buttonLabel(button, 'Working…'); }
   resultRow.classList.add('hidden');
   hubNotes.classList.add('hidden');
   jobRunning = true;
@@ -133,8 +134,9 @@ async function runJob(button, label, fn, opts) {
     }
   } finally {
     jobRunning = false;
-    if (button) { button.disabled = false; button.textContent = original; }
-    setTimeout(() => { if (!jobRunning) hubProgress.classList.add('hidden'); }, 400);
+    if (button) { button.disabled = false; PS.buttonLabel(button, original); }
+    // The bar has said what it had to; the result, or the error, takes over.
+    hubProgress.classList.add('hidden');
   }
 }
 
@@ -158,27 +160,71 @@ btnResultLoad.addEventListener('click', async () => {
  * Workbench shell
  * ------------------------------------------------------------------ */
 
-$('#btn-workbench').addEventListener('click', () => {
-  if (!PS.needDoc()) return;
-  resultRow.classList.add('hidden');
-  hubProgress.classList.add('hidden');
+/*
+ * The Tools drawer.
+ *
+ * It sits beside the document rather than over it, and has two views: the
+ * list of everything it can do, and one task at a time with a way back. A
+ * job's progress and its result stay pinned to the foot in both.
+ */
+const hubTitle = $('#hub-title');
+
+/** Show the list of tools. */
+function showHubHome() {
+  hubModal.dataset.view = 'home';
+  hubTitle.textContent = 'Tools';
+  for (const link of $$('.hub-link')) link.classList.remove('active');
+  for (const pane of $$('.hub-pane')) pane.classList.add('hidden');
+}
+
+/** Show one task. */
+function showHubPane(id) {
+  let title = 'Tools';
+  for (const link of $$('.hub-link')) {
+    const on = link.dataset.hub === id;
+    link.classList.toggle('active', on);
+    if (on) title = link.dataset.title || title;
+  }
+  for (const pane of $$('.hub-pane')) pane.classList.toggle('hidden', pane.id !== id);
+  hubModal.dataset.view = 'task';
+  hubTitle.textContent = title;
+  $('.hub', hubModal).scrollTop = 0;
+}
+
+/** Open the drawer, on a task if one is named and on the list if not. */
+function openHub(pane) {
   PS.openModal(hubModal);
+  if (pane && $('#' + pane)) showHubPane(pane);
+  else if (hubModal.dataset.view !== 'task') showHubHome();
   loadMetadataIntoForm();
+}
+
+$('#btn-workbench').addEventListener('click', () => {
+  if (!hubModal.classList.contains('hidden')) { PS.closeModal(hubModal); return; }
+  if (!PS.needDoc()) return;
+  openHub();
 });
 $('#hub-close').addEventListener('click', () => PS.closeModal(hubModal));
-
-function showHubPane(id) {
-  for (const link of $$('.hub-link')) link.classList.toggle('active', link.dataset.hub === id);
-  for (const pane of $$('.hub-pane')) pane.classList.toggle('hidden', pane.id !== id);
-}
+$('#hub-back').addEventListener('click', showHubHome);
 for (const link of $$('.hub-link')) {
   link.addEventListener('click', () => showHubPane(link.dataset.hub));
 }
 
-$('#btn-create-from').addEventListener('click', () => {
-  PS.openModal(hubModal);
-  showHubPane('hub-create');
-});
+// "Make a PDF" needs no open document, so it can be reached straight away.
+$('#btn-create-from').addEventListener('click', () => openHub('hub-create'));
+
+/*
+ * The other quick starts on the empty page need a document first: they ask
+ * for one, and the task opens as soon as it has loaded.
+ */
+let pendingPane = null;
+function startWith(pane) {
+  if (state.doc) { openHub(pane); return; }
+  pendingPane = pane;
+  $('#pdf-input').click();
+}
+$('#quick-convert').addEventListener('click', () => startWith('hub-convert'));
+$('#quick-merge').addEventListener('click', () => startWith('hub-organise'));
 
 /* live value readouts for the sliders */
 const READOUTS = [
@@ -379,8 +425,9 @@ function renderMergeList() {
     const spacer = document.createElement('span');
     spacer.className = 'spacer';
     const up = document.createElement('button');
-    up.className = 'mini';
-    up.textContent = '↑';
+    up.className = 'icon-btn sm';
+    up.setAttribute('aria-label', 'Move ' + file.name + ' up');
+    up.appendChild(PS.icon('arrow-up', 'sm'));
     up.disabled = i === 0;
     up.addEventListener('click', () => {
       const t = mergeFiles[i - 1];
@@ -389,8 +436,9 @@ function renderMergeList() {
       renderMergeList();
     });
     const remove = document.createElement('button');
-    remove.className = 'mini danger';
-    remove.textContent = '✕';
+    remove.className = 'icon-btn sm danger';
+    remove.setAttribute('aria-label', 'Remove ' + file.name);
+    remove.appendChild(PS.icon('x', 'sm'));
     remove.addEventListener('click', () => { mergeFiles.splice(i, 1); renderMergeList(); });
     li.appendChild(spacer);
     li.appendChild(up);
@@ -1032,7 +1080,7 @@ $('#pg-extract').addEventListener('click', () => {
     .map((position) => plan[position])
     .filter((step) => !step.blank)
     .map((step) => step.source);
-  PS.openModal(hubModal);
+  openHub();   // the result appears at the foot of the drawer
   runJob($('#pg-extract'), 'Extract', async () => {
     const base = await PS.exportAnnotated();
     return PSDocOps.extractPages(base, sources);
@@ -1049,8 +1097,8 @@ $('#pg-apply').addEventListener('click', async () => {
   }))) return;
   const button = $('#pg-apply');
   button.disabled = true;
-  const original = button.textContent;
-  button.textContent = 'Applying…';
+  const original = PS.buttonLabel(button);
+  PS.buttonLabel(button, 'Applying…');
   try {
     const base = await PS.exportAnnotated();
     const bytes = await PSDocOps.applyPagePlan(base, state.pagePlan);
@@ -1059,7 +1107,7 @@ $('#pg-apply').addEventListener('click', async () => {
   } catch (err) {
     showBanner('Could not apply the page changes: ' + ((err && err.message) || err));
   }
-  button.textContent = original;
+  PS.buttonLabel(button, original);
   refreshApplyButton();
 });
 
@@ -1237,7 +1285,7 @@ function buildNotes() {
  * ------------------------------------------------------------------ */
 
 // "Convert this PDF" from the popup or a context menu lands here.
-const requestedAction = new URLSearchParams(location.search).get('do');
+let requestedAction = new URLSearchParams(location.search).get('do');
 
 document.addEventListener('ps:document-loaded', () => {
   buildThumbnails();
@@ -1246,13 +1294,12 @@ document.addEventListener('ps:document-loaded', () => {
   buildNotes();
   loadMetadataIntoForm();
   renderMergeList();
-  if (requestedAction && hubModal.classList.contains('hidden')) {
-    const pane = 'hub-' + requestedAction;
-    if ($('#' + pane)) {
-      PS.openModal(hubModal);
-      showHubPane(pane);
-    }
-  }
+  // A task that was asked for before there was a document — from the popup,
+  // a context menu or a quick start — opens now, once.
+  const want = pendingPane || (requestedAction ? 'hub-' + requestedAction : null);
+  pendingPane = null;
+  requestedAction = null;
+  if (want && $('#' + want)) openHub(want);
 });
 
 document.addEventListener('ps:objects-changed', buildNotes);
@@ -1265,8 +1312,12 @@ renderMergeList();
 
 // "Create a PDF" needs no open document, so it can be shown straight away.
 if (requestedAction === 'create' && !new URLSearchParams(location.search).get('src')) {
-  PS.openModal(hubModal);
-  showHubPane('hub-create');
+  requestedAction = null;
+  openHub('hub-create');
 }
+
+// For the command palette, which opens tasks by name.
+PS.openHub = openHub;
+PS.showHubHome = showHubHome;
 
 })();

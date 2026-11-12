@@ -23,8 +23,38 @@ libraries. Every byte stays on your machine.
 - While viewing any PDF in a tab, click the toolbar icon → **Edit this PDF**
   or **Convert this PDF…**
 - Right-click a PDF link or page → *Edit* / *Convert in PDF Studio*.
-- Open the editor and drop a file on it, or press **Ctrl + O**.
+- Open the editor and drop a file anywhere in the window, or press **Ctrl + O**.
+  A picture, Word document, spreadsheet or text file dropped the same way is
+  made into a PDF and opened.
 - Password-protected files are supported: you are prompted when one is opened.
+
+## Finding your way around
+
+- **Top bar** — the file's name (click it to rename what you save), undo and
+  redo, **Open**, **Tools** and **Save PDF**. A dot beside the name means there
+  are changes you have not saved. The **⋯** menu holds the theme, night
+  reading, presentation mode and the shortcut list.
+- **Tool rail** down the left — every editing tool, one key each, and under
+  them the buttons for the side panel: pages, bookmarks, find, form fields,
+  notes. Pressing the button of the panel that is showing puts it away.
+- **Options strip** above the page — the settings of the tool in hand, or of
+  whatever is selected. It is always the same height, so the page never jumps
+  when you change tool.
+- **Dock** at the bottom of the document — page number, previous/next and zoom;
+  click the percentage for fit-width, fit-page, actual size and presets.
+- **Tools drawer** on the right — everything that produces a new file. It sits
+  beside the document rather than over it, and its progress and result stay
+  pinned to its foot.
+- **Ctrl + K** searches every tool, task and setting by name — type `word` and
+  press Enter to convert to Word, or type a number to jump to that page.
+- Messages appear at the bottom corner. Confirmations leave on their own;
+  anything that went wrong stays until you dismiss it. Deleting offers **Undo**
+  right there.
+
+The whole interface can be driven from the keyboard: Tab moves between regions,
+the arrow keys move along the tool rail, dialogs keep focus inside themselves
+and hand it back when they close, and Esc backs out of one thing at a time.
+Animations are skipped when the system asks for reduced motion.
 
 ---
 
@@ -38,7 +68,7 @@ Closing the tab with unsaved changes asks first.
 
 | Tool | Key | What it does |
 | --- | --- | --- |
-| Select | `V` | Move, resize (corner dot), duplicate (`Ctrl+D`), delete (`Del`) |
+| Select | `V` | Move, resize (corner handles), duplicate (`Ctrl+D`), delete (`Del`) — the last two are also on a small bar that follows the selection |
 | Text | `T` | Click to place a text box; bold, italic, size and colour. Double-click to re-edit |
 | Draw | `D` | Smoothed freehand pen with size and colour |
 | Highlight | `H` | Translucent marker in five colours, drawn with a multiply blend |
@@ -95,8 +125,9 @@ standard PDF fonts can be embedded without a font toolkit, which this extension
 does not bundle, so a serif paragraph is redrawn in Times, a monospaced one in
 Courier and everything else in Helvetica, at the same weight and slope. The
 shapes will not be identical to the original. The block's original font name and
-size are shown in the toolbar while it is selected, and the size, colour, bold,
-italic and **Face** controls beside them will correct anything detected wrongly. Text the standard fonts cannot represent —
+size are shown in the options strip while it is selected, and the size, colour,
+bold, italic and typeface controls beside them will correct anything detected
+wrongly. Text the standard fonts cannot represent —
 বাংলা, and anything else outside WinAnsi — is drawn by the browser's own fonts
 and embedded as a high-resolution picture instead, exactly as a new text box is.
 
@@ -130,13 +161,16 @@ pages also stops being selectable.
 
 ## Reading and navigating
 
-- Thumbnail sidebar, bookmark (outline) panel, form-field panel and a list of
-  your sticky notes — `F4` toggles the sidebar.
+- Side panel with page thumbnails, bookmarks (outline), form fields and a list
+  of your sticky notes — `F4` shows or hides it. In a narrow window it floats
+  over the document and starts closed.
 - **Find in document** (`Ctrl+F`) with live highlighting, match counts and
   jump-to-result.
-- Page box with previous/next, `Page Up` / `Page Down`, zoom (`Ctrl` `+`/`−`/`0`).
-- **Light and dark interface.** The interface is light by default; the sun/moon
-  button switches it and the choice is remembered. It changes the interface
+- Page box with previous/next, `Page Up` / `Page Down`, zoom (`Ctrl` `+`/`−`/`0`,
+  or `Ctrl` + wheel to zoom about the pointer).
+- **Light and dark interface.** It follows the system until you choose
+  otherwise — Light, Dark or System in the **⋯** menu, or the button in the
+  toolbar popup — and the choice is remembered. It changes the interface
   only — the page, whiteout, redaction, highlights and the signature pad keep
   their real colours in both themes, because a whiteout that drew dark would
   misrepresent what the saved file contains.
@@ -152,9 +186,11 @@ Stage changes on the thumbnails, then press **Apply changes**:
 - Rotate left/right, duplicate, delete, insert a blank page.
 - Extract the selected pages into a new PDF.
 
-## Workbench
+## Tools
 
-One dialog holds everything that produces a new file.
+The **Tools** drawer holds everything that produces a new file. It opens on a
+list of tasks; each task has its own page with a way back, and the document
+stays live beside it.
 
 ### Convert from PDF
 
@@ -354,7 +390,9 @@ Manifest V3, no build step, no remote code, no network access.
 | File | Role |
 | --- | --- |
 | `editor.js` | Viewer, annotation tools, export |
-| `ui.js` | Workbench and side panels |
+| `ui.js` | Tools drawer and side panels |
+| `palette.js` | Ctrl+K action search; calls what the buttons call, implements nothing itself |
+| `tokens.css` | Design tokens — colour, space, type, motion — for both themes |
 | `extract.js` | Layout analysis: columns, paragraphs, lists, headings, tables, figures |
 | `contentedit.js` | Removes text from a page's content stream, with verification |
 | `convert.js` | Every format conversion, in and out |

@@ -1,182 +1,197 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>PDF Studio</title>
+  <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="editor.css">
   <script src="theme.js"></script>
 </head>
 <body>
 
-<header class="topbar">
+<!-- One icon set for the whole interface: 24px grid, one stroke weight. -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-cursor" viewBox="0 0 24 24"><path d="M5.5 3.5l13 7.4-5.7 1.7-2.6 5.9z"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 7V5h14v2M12 5v14M9 19h6"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l1-4.2L16.3 4.5a2.1 2.1 0 0 1 3 3L8.2 19 4 20zM14.5 6.5l3 3"/></symbol>
+  <symbol id="i-highlight" viewBox="0 0 24 24"><path d="M14.5 4.5l5 5L11.5 17.5H7v-4.5zM4 21h16"/></symbol>
+  <symbol id="i-shape" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="10" height="10" rx="1.6"/><circle cx="15.5" cy="15.5" r="5"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 4h14a1 1 0 0 1 1 1v9l-6 6H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM20 14h-5a1 1 0 0 0-1 1v5"/></symbol>
+  <symbol id="i-eraser" viewBox="0 0 24 24"><path d="M20 20.5H8.5L4.4 16.4a1.5 1.5 0 0 1 0-2.1l9-9a1.5 1.5 0 0 1 2.1 0l4.9 4.9a1.5 1.5 0 0 1 0 2.1L13 20.2M9.5 9.5l6 6"/></symbol>
+  <symbol id="i-redact" viewBox="0 0 24 24"><path d="M4 5.5h10M4 18.5h14"/><rect class="fill" x="3" y="9.2" width="18" height="5.6" rx="1.2"/></symbol>
+  <symbol id="i-sign" viewBox="0 0 24 24"><path d="M3 16.5c3-6.8 5-8.8 6-6.8s-2 6.8 0 6.8 3-5 5-5 1 4 3 4 2-2 4-2M3 21h18"/></symbol>
+  <symbol id="i-stamp" viewBox="0 0 24 24"><path d="M12 3.5a3 3 0 0 1 2 5.2c-.6.6-1 1.4-1 2.3v.5h3a2 2 0 0 1 2 2v3H6v-3a2 2 0 0 1 2-2h3V11c0-.9-.4-1.7-1-2.3a3 3 0 0 1 2-5.2zM5 20.5h14"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-5 4 4 3-3 4.2 4.2"/></symbol>
+  <symbol id="i-image-edit" viewBox="0 0 24 24"><path d="M20.5 11V6.5a2 2 0 0 0-2-2h-13a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2H11M3.8 16.5l4.7-4.7 3.2 3.2"/><circle cx="8.5" cy="9" r="1.4"/><path d="M14 20.5l.6-2.8 5.4-5.4 2.2 2.2-5.4 5.4z"/></symbol>
+  <symbol id="i-text-edit" viewBox="0 0 24 24"><path d="M4 6h13M4 11h9M4 16h5M13 20.5l.6-2.8 5.9-5.9 2.2 2.2-5.9 5.9z"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h3.6l2 2H18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11.5M7.5 11l4.5 4.5 4.5-4.5M5 19.5h14"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle class="fill" cx="6" cy="12" r="1.5"/><circle class="fill" cx="12" cy="12" r="1.5"/><circle class="fill" cx="18" cy="12" r="1.5"/></symbol>
+  <symbol id="i-pages" viewBox="0 0 24 24"><rect x="5" y="3.5" width="11" height="14" rx="1.6"/><path d="M8.5 20.5h9a1.5 1.5 0 0 0 1.5-1.5V7.5"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+  <symbol id="i-form" viewBox="0 0 24 24"><path d="M4 6.5L5.5 8 8 5.5M11.5 7H20M4 12.5L5.5 14 8 11.5M11.5 13H20M4 18.5L5.5 20 8 17.5M11.5 19H20"/></symbol>
+  <symbol id="i-comment" viewBox="0 0 24 24"><path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-6.8L8 20v-4H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/></symbol>
+  <symbol id="i-chev-left" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"/></symbol>
+  <symbol id="i-chev-right" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6"/></symbol>
+  <symbol id="i-chev-down" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 12h16M7.5 8.5L4 12l3.5 3.5M16.5 8.5L20 12l-3.5 3.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-rotate-left" viewBox="0 0 24 24"><path d="M4 5v5h5M4.6 14a8 8 0 1 0 1.9-7.6L4 10"/></symbol>
+  <symbol id="i-rotate-right" viewBox="0 0 24 24"><path d="M20 5v5h-5M19.4 14a8 8 0 1 1-1.9-7.6L20 10"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2M6.5 7l1 12a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-12M10 11v5.5M14 11v5.5"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h13M14 5l3 3-3 3M20 16H7M10 13l-3 3 3 3"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.8v2.2M12 19v2.2M2.8 12H5M19 12h2.2M5.5 5.5L7 7M17 17l1.5 1.5M18.5 5.5L17 7M7 17l-1.5 1.5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8.2 8.2 0 1 0 20 14.5z"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="12" rx="2"/><path d="M9 20.5h6M12 16.5v4"/></symbol>
+  <symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path class="fill" d="M12 3.5a8.5 8.5 0 0 1 0 17z"/></symbol>
+  <symbol id="i-present" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M12 16v4M8.5 20.5h7"/><path class="fill" d="M10.5 7.8l4 2.4-4 2.4z"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="3" y="6.5" width="18" height="11" rx="2"/><path d="M7 10.5h.01M11 10.5h.01M15 10.5h.01M8 14h8"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4.5l8.5 14.5h-17zM12 10v4.5M12 17.2h.01"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3.5h7l4.5 4.5V19a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5zM14 3.5V8h4.5"/></symbol>
+  <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M7 3.5h7l4.5 4.5V19a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5zM14 3.5V8h4.5M12 11.5v6M9 14.5h6"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 4l8.5 4.5L12 13 3.5 8.5zM3.5 13L12 17.5l8.5-4.5"/></symbol>
+  <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M9.5 9.5v10"/></symbol>
+  <symbol id="i-droplet" viewBox="0 0 24 24"><path d="M12 3.5s6 6.2 6 10.5a6 6 0 0 1-12 0c0-4.3 6-10.5 6-10.5z"/></symbol>
+  <symbol id="i-compress" viewBox="0 0 24 24"><path d="M8.5 4v4.5H4M15.5 4v4.5H20M8.5 20v-4.5H4M15.5 20v-4.5H20"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></symbol>
+</svg>
+
+<header class="appbar">
   <div class="brand">
-    <img src="icons/icon48.png" alt="" width="20" height="20">
+    <img src="icons/icon48.png" alt="" width="22" height="22">
     <span>PDF&nbsp;Studio</span>
   </div>
 
-  <div class="tools" id="tools">
-    <button class="tool active" data-tool="select" title="Select and move (V)">
-      <svg viewBox="0 0 24 24"><path d="M6 3l12 8-6 1.2L9.5 18z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-      <span>Select</span>
-    </button>
-    <button class="tool" data-tool="text" title="Add text (T)">
-      <svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-      <span>Text</span>
-    </button>
-    <button class="tool" data-tool="draw" title="Freehand pen (D)">
-      <svg viewBox="0 0 24 24"><path d="M4 20c4-1 3-4 6-6s5-6 8-8l-2-2c-2 3-6 5-8 8s-5 2-6 6z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-      <span>Draw</span>
-    </button>
-    <button class="tool" data-tool="highlight" title="Highlighter (H)">
-      <svg viewBox="0 0 24 24"><path d="M4 19h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M7 15l8-9 3 3-8 9H7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-      <span>Highlight</span>
-    </button>
-    <button class="tool" data-tool="shape" title="Shapes — rectangle, ellipse, line, arrow (R)">
-      <svg viewBox="0 0 24 24"><rect x="3.5" y="6" width="10" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="16" cy="15" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-      <span>Shape</span>
-    </button>
-    <button class="tool" data-tool="whiteout" title="Whiteout — cover an area (W)">
-      <svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 17l7-10" stroke="currentColor" stroke-width="1.4"/></svg>
-      <span>Whiteout</span>
-    </button>
-    <button class="tool" data-tool="redact" title="Redact — permanently remove content (X)">
-      <svg viewBox="0 0 24 24"><rect x="3.5" y="8" width="17" height="8" rx="1.2" fill="currentColor"/></svg>
-      <span>Redact</span>
-    </button>
-    <button class="tool" data-tool="note" title="Sticky note (N)">
-      <svg viewBox="0 0 24 24"><path d="M4 5h16v10l-4 4H4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M20 15h-4v4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-      <span>Note</span>
-    </button>
-    <span class="tool-sep"></span>
-    <button class="tool" id="btn-signature" title="Add a signature (S)">
-      <svg viewBox="0 0 24 24"><path d="M3 17c3-6 5-8 6-6s-2 6 0 6 3-5 5-5 1 4 3 4 2-2 4-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <span>Sign</span>
-    </button>
-    <button class="tool" id="btn-stamp" title="Stamp (M)">
-      <svg viewBox="0 0 24 24"><path d="M6 20h12M8 16h8l-1-4a3 3 0 0 0-1-3 3 3 0 1 1-4 0 3 3 0 0 0-1 3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-      <span>Stamp</span>
-    </button>
-    <button class="tool" id="btn-image" title="Insert a picture (I)">
-      <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><path d="M5 17l5-5 4 4 3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-      <span>Image</span>
-    </button>
-    <button class="tool" data-tool="pictures" title="Edit a picture already in the document (P)">
-      <svg viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4 14l4-4 3 3 2-2 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M14.5 17.5l6-6M20.5 11.5v4m0-4h-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <span>Pictures</span>
-    </button>
-    <button class="tool" data-tool="edittext" title="Edit text already in the document (E)">
-      <svg viewBox="0 0 24 24"><path d="M4 6h11M4 11h11M4 16h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M14.5 19.5l6-6-2.5-2.5-6 6-.6 3.1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-      <span>Edit text</span>
-    </button>
+  <div class="doc-title">
+    <button class="doc-name hidden" id="doc-name" data-tip="Rename the file you save" data-tip-side="bottom"></button>
+    <span id="meta">No document loaded</span>
+    <span class="dirty-dot" id="dirty-dot" title="There are changes you have not saved"></span>
   </div>
 
-  <div class="ctx" id="ctx">
-    <div class="ctx-group hidden" id="ctx-text">
-      <label>Size <input type="number" id="text-size" min="6" max="144" step="0.5" value="16"></label>
-      <label>Color <input type="color" id="text-color" value="#111318"></label>
-      <label class="chk"><input type="checkbox" id="text-bold"> B</label>
-      <label class="chk"><input type="checkbox" id="text-italic"> <i>I</i></label>
-      <label>Face
-        <select id="text-family">
-          <option value="sans">Sans</option>
-          <option value="serif">Serif</option>
-          <option value="mono">Mono</option>
-        </select>
-      </label>
-      <span class="tiny muted origin" id="text-origin"></span>
-    </div>
-    <div class="ctx-group hidden" id="ctx-pen">
-      <label>Pen <input type="range" id="pen-size" min="1" max="14" step="0.5" value="3"></label>
-      <label>Color <input type="color" id="pen-color" value="#16213e"></label>
-      <button class="mini" id="btn-undo-stroke" title="Undo (Ctrl+Z)">Undo</button>
-    </div>
-    <div class="ctx-group hidden" id="ctx-highlight">
-      <label>Color
-        <select id="hl-color">
-          <option value="#ffe14d">Yellow</option>
-          <option value="#8ef2a6">Green</option>
-          <option value="#8ecbff">Blue</option>
-          <option value="#ff9ec4">Pink</option>
-          <option value="#ffb774">Orange</option>
-        </select>
-      </label>
-      <label>Strength <input type="range" id="hl-opacity" min="10" max="80" step="5" value="38"></label>
-    </div>
-    <div class="ctx-group hidden" id="ctx-shape">
-      <label>Kind
-        <select id="shape-kind">
-          <option value="rect">Rectangle</option>
-          <option value="ellipse">Ellipse</option>
-          <option value="line">Line</option>
-          <option value="arrow">Arrow</option>
-        </select>
-      </label>
-      <label>Stroke <input type="color" id="shape-stroke" value="#d92d20"></label>
-      <label>Width <input type="range" id="shape-width" min="0.5" max="10" step="0.5" value="2"></label>
-      <label>Fill <input type="color" id="shape-fill" value="#ffffff"></label>
-      <label class="chk"><input type="checkbox" id="shape-filled"> Filled</label>
-    </div>
-    <button class="mini hidden" id="btn-replace-img" title="Swap this picture for another">Replace</button>
-    <button class="mini hidden" id="btn-duplicate-obj" title="Duplicate selected (Ctrl+D)">Duplicate</button>
-    <button class="mini danger hidden" id="btn-delete-obj" title="Delete selected (Del)">Delete</button>
-  </div>
+  <span class="spacer"></span>
 
   <div class="actions">
-    <button class="icon-btn" id="btn-undo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>
-      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <button class="icon-btn" id="btn-undo" aria-label="Undo" aria-keyshortcuts="Control+Z" data-tip="Undo (Ctrl+Z)" data-tip-side="bottom" disabled>
+      <svg class="icon"><use href="#i-undo"/></svg>
     </button>
-    <button class="icon-btn" id="btn-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>
-      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <button class="icon-btn" id="btn-redo" aria-label="Redo" aria-keyshortcuts="Control+Shift+Z" data-tip="Redo (Ctrl+Shift+Z)" data-tip-side="bottom" disabled>
+      <svg class="icon"><use href="#i-redo"/></svg>
     </button>
-    <button class="btn ghost" id="btn-open-top">Open</button>
-    <button class="btn" id="btn-workbench" disabled>Workbench</button>
-    <button class="btn primary" id="btn-download" disabled>Save PDF</button>
+    <span class="bar-sep"></span>
+    <button class="btn ghost" id="btn-open-top" aria-keyshortcuts="Control+O"><svg class="icon"><use href="#i-open"/></svg><span>Open</span></button>
+    <button class="btn" id="btn-workbench" aria-controls="hub-modal" aria-expanded="false" disabled><svg class="icon"><use href="#i-grid"/></svg><span>Tools</span></button>
+    <button class="btn primary" id="btn-download" aria-keyshortcuts="Control+S" disabled><svg class="icon"><use href="#i-download"/></svg><span>Save PDF</span></button>
+    <div class="menu-anchor">
+      <button class="icon-btn" id="btn-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" data-tip="More" data-tip-side="bottom">
+        <svg class="icon"><use href="#i-more"/></svg>
+      </button>
+      <div class="menu hidden" id="more-menu" role="menu" aria-label="More">
+        <div class="menu-label" id="theme-label">Theme</div>
+        <div class="seg" id="theme-seg" role="radiogroup" aria-labelledby="theme-label">
+          <button role="radio" aria-checked="false" data-theme-set="light"><svg class="icon sm"><use href="#i-sun"/></svg>Light</button>
+          <button role="radio" aria-checked="false" data-theme-set="dark"><svg class="icon sm"><use href="#i-moon"/></svg>Dark</button>
+          <button role="radio" aria-checked="false" data-theme-set="system"><svg class="icon sm"><use href="#i-monitor"/></svg>System</button>
+        </div>
+        <div class="menu-sep"></div>
+        <button class="menu-item" id="btn-night" role="menuitemcheckbox" aria-checked="false"><svg class="icon"><use href="#i-contrast"/></svg><span>Night reading</span></button>
+        <button class="menu-item" id="btn-present" role="menuitem"><svg class="icon"><use href="#i-present"/></svg><span>Presentation</span><kbd>F5</kbd></button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" id="btn-palette" role="menuitem"><svg class="icon"><use href="#i-search"/></svg><span>Search actions</span><kbd>Ctrl K</kbd></button>
+        <button class="menu-item" id="btn-keys" role="menuitem"><svg class="icon"><use href="#i-keyboard"/></svg><span>Keyboard shortcuts</span><kbd>?</kbd></button>
+      </div>
+    </div>
   </div>
+  <div class="busy" id="busy" role="progressbar" aria-label="Working"></div>
 </header>
 
-<div class="metabar">
-  <div id="banner" class="banner hidden"></div>
-  <div class="meta-left">
-    <button class="icon-btn" id="btn-sidebar" title="Toggle the side panel (F4)">
-      <svg viewBox="0 0 24 24" width="16" height="16"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9 4v16" stroke="currentColor" stroke-width="1.7"/></svg>
-    </button>
-    <span id="meta">No document loaded</span>
-  </div>
-  <div class="meta-right">
-    <span class="pagenav">
-      <button id="page-prev" title="Previous page">‹</button>
-      <input type="number" id="page-current" min="1" value="1" title="Go to page">
-      <span id="page-total">/ 0</span>
-      <button id="page-next" title="Next page">›</button>
-    </span>
-    <span id="hint" class="hint"></span>
-    <button class="icon-btn" id="btn-theme" title="Switch to the dark interface" aria-pressed="false">
-      <svg data-theme-icon="dark" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8.2 8.2 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-      <svg data-theme-icon="light" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style="display:none"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-    </button>
-    <button class="icon-btn" id="btn-night" title="Night reading mode">
-      <svg viewBox="0 0 24 24" width="16" height="16"><path d="M20 14.5A8 8 0 0 1 9.5 4 8.2 8.2 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-    </button>
-    <button class="icon-btn" id="btn-present" title="Presentation mode (F5)">
-      <svg viewBox="0 0 24 24" width="16" height="16"><rect x="3" y="5" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M10 21h4M12 17v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-    </button>
-    <span class="zoom">
-      <button id="zoom-out" title="Zoom out">−</button>
-      <span id="zoom-label">100%</span>
-      <button id="zoom-in" title="Zoom in">+</button>
-      <button id="zoom-fit" title="Fit width">Fit</button>
-    </span>
-  </div>
-</div>
+<div class="shell" id="workspace">
 
-<div class="workspace" id="workspace">
-  <aside class="sidebar" id="sidebar">
-    <div class="side-tabs">
-      <button class="side-tab active" data-panel="panel-pages" title="Pages">Pages</button>
-      <button class="side-tab" data-panel="panel-outline" title="Bookmarks">Marks</button>
-      <button class="side-tab" data-panel="panel-search" title="Search">Find</button>
-      <button class="side-tab" data-panel="panel-fields" title="Form fields">Form</button>
-      <button class="side-tab" data-panel="panel-notes" title="Comments">Notes</button>
+  <!-- ============ Tool rail ============ -->
+  <nav class="rail" aria-label="Tools and panels">
+    <div class="tools" id="tools" role="toolbar" aria-label="Tools" aria-orientation="vertical">
+      <button class="tool active" data-tool="select" aria-label="Select and move" aria-keyshortcuts="V" data-tip="Select (V)">
+        <svg class="icon"><use href="#i-cursor"/></svg>
+      </button>
+      <span class="tool-sep"></span>
+      <button class="tool" data-tool="text" aria-label="Add text" aria-keyshortcuts="T" data-tip="Text (T)">
+        <svg class="icon"><use href="#i-text"/></svg>
+      </button>
+      <button class="tool" data-tool="draw" aria-label="Freehand pen" aria-keyshortcuts="D" data-tip="Draw (D)">
+        <svg class="icon"><use href="#i-pen"/></svg>
+      </button>
+      <button class="tool" data-tool="highlight" aria-label="Highlighter" aria-keyshortcuts="H" data-tip="Highlight (H)">
+        <svg class="icon"><use href="#i-highlight"/></svg>
+      </button>
+      <button class="tool" data-tool="shape" aria-label="Shapes: rectangle, ellipse, line, arrow" aria-keyshortcuts="R" data-tip="Shape (R)">
+        <svg class="icon"><use href="#i-shape"/></svg>
+      </button>
+      <button class="tool" data-tool="note" aria-label="Sticky note" aria-keyshortcuts="N" data-tip="Note (N)">
+        <svg class="icon"><use href="#i-note"/></svg>
+      </button>
+      <span class="tool-sep"></span>
+      <button class="tool" data-tool="whiteout" aria-label="Whiteout: cover an area" aria-keyshortcuts="W" data-tip="Whiteout (W)">
+        <svg class="icon"><use href="#i-eraser"/></svg>
+      </button>
+      <button class="tool" data-tool="redact" aria-label="Redact: permanently remove content" aria-keyshortcuts="X" data-tip="Redact (X)">
+        <svg class="icon"><use href="#i-redact"/></svg>
+      </button>
+      <span class="tool-sep"></span>
+      <button class="tool" id="btn-signature" aria-label="Add a signature" aria-keyshortcuts="S" data-tip="Sign (S)">
+        <svg class="icon"><use href="#i-sign"/></svg>
+      </button>
+      <button class="tool" id="btn-stamp" aria-label="Stamp" aria-keyshortcuts="M" data-tip="Stamp (M)">
+        <svg class="icon"><use href="#i-stamp"/></svg>
+      </button>
+      <button class="tool" id="btn-image" aria-label="Insert a picture" aria-keyshortcuts="I" data-tip="Image (I)">
+        <svg class="icon"><use href="#i-image"/></svg>
+      </button>
+      <span class="tool-sep"></span>
+      <button class="tool" data-tool="edittext" aria-label="Edit text already in the document" aria-keyshortcuts="E" data-tip="Edit text (E)">
+        <svg class="icon"><use href="#i-text-edit"/></svg>
+      </button>
+      <button class="tool" data-tool="pictures" aria-label="Edit a picture already in the document" aria-keyshortcuts="P" data-tip="Edit pictures (P)">
+        <svg class="icon"><use href="#i-image-edit"/></svg>
+      </button>
+    </div>
+
+    <div class="rail-foot" role="tablist" aria-label="Side panel" aria-orientation="vertical">
+      <button class="side-tab active" data-panel="panel-pages" role="tab" aria-label="Pages" data-tip="Pages (F4)">
+        <svg class="icon"><use href="#i-pages"/></svg>
+      </button>
+      <button class="side-tab" data-panel="panel-outline" role="tab" aria-label="Bookmarks" data-tip="Bookmarks">
+        <svg class="icon"><use href="#i-bookmark"/></svg>
+      </button>
+      <button class="side-tab" data-panel="panel-search" role="tab" aria-label="Find in document" data-tip="Find (Ctrl+F)">
+        <svg class="icon"><use href="#i-search"/></svg>
+      </button>
+      <button class="side-tab" data-panel="panel-fields" role="tab" aria-label="Form fields" data-tip="Form fields">
+        <svg class="icon"><use href="#i-form"/></svg>
+      </button>
+      <button class="side-tab" data-panel="panel-notes" role="tab" aria-label="Notes" data-tip="Notes">
+        <svg class="icon"><use href="#i-comment"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ============ Side panel ============ -->
+  <aside class="sidebar" id="sidebar" aria-label="Side panel">
+    <div class="side-head">
+      <h2 id="side-title">Pages</h2>
+      <button class="icon-btn" id="btn-sidebar" aria-label="Hide the side panel" data-tip="Hide panel (F4)" data-tip-side="bottom">
+        <svg class="icon"><use href="#i-panel"/></svg>
+      </button>
     </div>
 
     <div class="side-panel" id="panel-pages">
@@ -184,18 +199,19 @@
         <button class="mini" id="pg-select-all">All</button>
         <button class="mini" id="pg-select-none">None</button>
         <span class="spacer"></span>
-        <button class="mini" id="pg-rot-left" title="Rotate left">⟲</button>
-        <button class="mini" id="pg-rot-right" title="Rotate right">⟳</button>
-        <button class="mini" id="pg-duplicate" title="Duplicate">⧉</button>
-        <button class="mini danger" id="pg-delete" title="Delete">✕</button>
+        <button class="icon-btn sm" id="pg-rot-left" aria-label="Rotate left" data-tip="Rotate left"><svg class="icon sm"><use href="#i-rotate-left"/></svg></button>
+        <button class="icon-btn sm" id="pg-rot-right" aria-label="Rotate right" data-tip="Rotate right"><svg class="icon sm"><use href="#i-rotate-right"/></svg></button>
+        <button class="icon-btn sm" id="pg-duplicate" aria-label="Duplicate pages" data-tip="Duplicate"><svg class="icon sm"><use href="#i-copy"/></svg></button>
+        <button class="icon-btn sm danger" id="pg-delete" aria-label="Delete pages" data-tip="Delete"><svg class="icon sm"><use href="#i-trash"/></svg></button>
       </div>
       <div class="side-actions">
         <button class="mini" id="pg-insert-blank">Insert blank</button>
         <button class="mini" id="pg-extract">Extract</button>
-        <button class="mini" id="pg-apply" disabled>Apply changes</button>
+        <span class="spacer"></span>
+        <button class="mini primary" id="pg-apply" disabled>Apply changes</button>
       </div>
       <div class="thumbs" id="thumbs"></div>
-      <p class="tiny muted pad">Drag thumbnails to reorder. Changes are staged until you press <b>Apply changes</b>.</p>
+      <p class="tiny muted pad">Drag to reorder. Changes wait until you press <b>Apply changes</b>.</p>
     </div>
 
     <div class="side-panel hidden" id="panel-outline">
@@ -204,14 +220,14 @@
 
     <div class="side-panel hidden" id="panel-search">
       <div class="side-actions">
-        <input type="search" id="search-input" placeholder="Find in document…">
+        <input type="search" id="search-input" placeholder="Find in document…" aria-label="Find in document">
       </div>
       <div class="side-actions">
         <label class="chk tiny"><input type="checkbox" id="search-case"> Match case</label>
         <span class="spacer"></span>
-        <span class="tiny muted" id="search-count"></span>
-        <button class="mini" id="search-prev">↑</button>
-        <button class="mini" id="search-next">↓</button>
+        <span class="tiny muted" id="search-count" aria-live="polite"></span>
+        <button class="icon-btn sm" id="search-prev" aria-label="Previous match"><svg class="icon sm"><use href="#i-arrow-up"/></svg></button>
+        <button class="icon-btn sm" id="search-next" aria-label="Next match"><svg class="icon sm"><use href="#i-arrow-down"/></svg></button>
       </div>
       <div class="results" id="search-results"></div>
     </div>
@@ -219,8 +235,9 @@
     <div class="side-panel hidden" id="panel-fields">
       <div class="side-actions">
         <button class="mini" id="fields-reload">Reload</button>
-        <button class="mini" id="fields-apply">Apply</button>
+        <span class="spacer"></span>
         <button class="mini" id="fields-flatten">Flatten</button>
+        <button class="mini primary" id="fields-apply">Apply</button>
       </div>
       <div class="fields" id="fields"><p class="tiny muted pad">Open a document to see its form fields.</p></div>
     </div>
@@ -230,35 +247,599 @@
     </div>
   </aside>
 
-  <main id="viewer">
-    <div id="empty-state">
-      <div class="drop-card">
-        <svg viewBox="0 0 24 24" width="40" height="40"><path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v4h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M4 19c2-4 3.5-5.5 4.5-4.5S7 19 9 19s2.5-3.5 4-3.5 1 2.7 2.5 2.7 1.7-1.4 3-1.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <h1>Drop a PDF here</h1>
-        <p>or</p>
-        <div class="drop-actions">
-          <button class="btn primary" id="btn-open-file">Choose a PDF</button>
-          <button class="btn" id="btn-create-from">Create a PDF from other files</button>
+  <!-- ============ Stage: options, document, dock ============ -->
+  <div class="stage">
+
+    <!-- Always the same height: what it holds changes, the page under it does not move. -->
+    <div class="strip" id="ctx" aria-label="Tool options">
+      <div class="ctx-group hidden" id="ctx-text">
+        <span class="strip-title">Text</span>
+        <label class="field" data-tip="Size"><span class="sr-only">Size</span>
+          <input type="number" id="text-size" min="6" max="144" step="0.5" value="16"><span class="unit">pt</span>
+        </label>
+        <label class="swatch" data-tip="Colour"><span class="sr-only">Colour</span><input type="color" id="text-color" value="#111318"></label>
+        <span class="seg-toggle">
+          <label class="toggle" data-tip="Bold"><input type="checkbox" id="text-bold"><b>B</b><span class="sr-only">Bold</span></label>
+          <label class="toggle" data-tip="Italic"><input type="checkbox" id="text-italic"><i>I</i><span class="sr-only">Italic</span></label>
+        </span>
+        <label class="field" data-tip="Typeface"><span class="sr-only">Typeface</span>
+          <select id="text-family">
+            <option value="sans">Sans</option>
+            <option value="serif">Serif</option>
+            <option value="mono">Mono</option>
+          </select>
+        </label>
+        <span class="origin" id="text-origin"></span>
+      </div>
+
+      <div class="ctx-group hidden" id="ctx-pen">
+        <span class="strip-title">Pen</span>
+        <label class="field">Size <input type="range" id="pen-size" min="1" max="14" step="0.5" value="3"></label>
+        <label class="swatch" data-tip="Colour"><span class="sr-only">Colour</span><input type="color" id="pen-color" value="#16213e"></label>
+        <button class="mini" id="btn-undo-stroke">Undo stroke</button>
+      </div>
+
+      <div class="ctx-group hidden" id="ctx-highlight">
+        <span class="strip-title">Highlight</span>
+        <span class="chips" id="hl-chips" role="radiogroup" aria-label="Highlight colour"></span>
+        <label class="field sr-only">Colour
+          <select id="hl-color">
+            <option value="#ffe14d">Yellow</option>
+            <option value="#8ef2a6">Green</option>
+            <option value="#8ecbff">Blue</option>
+            <option value="#ff9ec4">Pink</option>
+            <option value="#ffb774">Orange</option>
+          </select>
+        </label>
+        <label class="field">Strength <input type="range" id="hl-opacity" min="10" max="80" step="5" value="38"></label>
+      </div>
+
+      <div class="ctx-group hidden" id="ctx-shape">
+        <span class="strip-title">Shape</span>
+        <label class="field" data-tip="Kind"><span class="sr-only">Kind</span>
+          <select id="shape-kind">
+            <option value="rect">Rectangle</option>
+            <option value="ellipse">Ellipse</option>
+            <option value="line">Line</option>
+            <option value="arrow">Arrow</option>
+          </select>
+        </label>
+        <label class="swatch" data-tip="Line colour"><span class="sr-only">Line colour</span><input type="color" id="shape-stroke" value="#d92d20"></label>
+        <label class="field">Width <input type="range" id="shape-width" min="0.5" max="10" step="0.5" value="2"></label>
+        <label class="chk"><input type="checkbox" id="shape-filled"> Fill</label>
+        <label class="swatch" data-tip="Fill colour"><span class="sr-only">Fill colour</span><input type="color" id="shape-fill" value="#ffffff"></label>
+      </div>
+
+      <span id="hint" class="hint" aria-live="polite"></span>
+    </div>
+
+    <main id="viewer" tabindex="-1" aria-label="Document">
+      <div id="empty-state">
+        <div class="drop-card">
+          <div class="drop-art"><svg class="icon lg"><use href="#i-file"/></svg></div>
+          <h1>Drop a PDF to begin</h1>
+          <p class="muted">Edit, sign, organise and convert — nothing leaves your machine.</p>
+          <div class="drop-actions">
+            <button class="btn primary big" id="btn-open-file"><svg class="icon"><use href="#i-open"/></svg><span>Choose a PDF</span></button>
+          </div>
+          <div class="quick">
+            <button class="quick-tile" id="quick-convert">
+              <svg class="icon"><use href="#i-swap"/></svg>
+              <b>Convert a PDF</b><span>to Word, Excel, PowerPoint, images…</span>
+            </button>
+            <button class="quick-tile" id="quick-merge">
+              <svg class="icon"><use href="#i-layers"/></svg>
+              <b>Merge or split</b><span>join several PDFs, or cut one up</span>
+            </button>
+            <button class="quick-tile" id="btn-create-from">
+              <svg class="icon"><use href="#i-file-plus"/></svg>
+              <b>Make a PDF</b><span>from images, Word, Excel or text</span>
+            </button>
+            <button class="quick-tile" id="quick-keys">
+              <svg class="icon"><use href="#i-keyboard"/></svg>
+              <b>Shortcuts</b><span>every key, and Ctrl+K to search</span>
+            </button>
+          </div>
         </div>
-        <p class="tiny">Images, Word documents, spreadsheets and plain text can all become PDFs — and any PDF can become Word, Excel, PowerPoint and more.</p>
+      </div>
+      <div id="pages"></div>
+    </main>
+
+    <!-- Page and zoom, floating over the bottom of the document. -->
+    <div class="dock" id="dock" role="group" aria-label="Page and zoom">
+      <button class="icon-btn sm" id="page-prev" aria-label="Previous page" data-tip="Previous page" data-tip-side="top"><svg class="icon sm"><use href="#i-chev-left"/></svg></button>
+      <span class="pagenav">
+        <input type="number" id="page-current" min="1" value="1" aria-label="Page number">
+        <span id="page-total">/ 0</span>
+      </span>
+      <button class="icon-btn sm" id="page-next" aria-label="Next page" data-tip="Next page" data-tip-side="top"><svg class="icon sm"><use href="#i-chev-right"/></svg></button>
+      <span class="bar-sep"></span>
+      <button class="icon-btn sm" id="zoom-out" aria-label="Zoom out" data-tip="Zoom out (Ctrl −)" data-tip-side="top"><svg class="icon sm"><use href="#i-minus"/></svg></button>
+      <div class="menu-anchor">
+        <button class="zoom-value" id="zoom-label" aria-label="Zoom level" aria-haspopup="menu" aria-expanded="false" aria-controls="zoom-menu">100%</button>
+        <div class="menu up hidden" id="zoom-menu" role="menu" aria-label="Zoom">
+          <button class="menu-item" role="menuitem" data-zoom="fit-width"><span>Fit width</span><kbd>Ctrl 0</kbd></button>
+          <button class="menu-item" role="menuitem" data-zoom="fit-page"><span>Fit page</span></button>
+          <button class="menu-item" role="menuitem" data-zoom="actual"><span>Actual size</span></button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" role="menuitem" data-zoom="0.5"><span>50%</span></button>
+          <button class="menu-item" role="menuitem" data-zoom="0.75"><span>75%</span></button>
+          <button class="menu-item" role="menuitem" data-zoom="1.25"><span>125%</span></button>
+          <button class="menu-item" role="menuitem" data-zoom="1.5"><span>150%</span></button>
+          <button class="menu-item" role="menuitem" data-zoom="2"><span>200%</span></button>
+          <button class="menu-item" role="menuitem" data-zoom="4"><span>400%</span></button>
+        </div>
+      </div>
+      <button class="icon-btn sm" id="zoom-in" aria-label="Zoom in" data-tip="Zoom in (Ctrl +)" data-tip-side="top"><svg class="icon sm"><use href="#i-plus"/></svg></button>
+      <button class="icon-btn sm" id="zoom-fit" aria-label="Fit width" data-tip="Fit width (Ctrl 0)" data-tip-side="top"><svg class="icon sm"><use href="#i-fit"/></svg></button>
+    </div>
+
+    <!-- Messages: errors stay until dismissed, the rest leave on their own. -->
+    <div class="toasts" id="banner" aria-live="polite"></div>
+  </div>
+
+  <!-- ============ Tools drawer ============ -->
+  <aside class="drawer hidden" id="hub-modal" aria-label="Tools" data-view="home">
+    <div class="drawer-head">
+      <button class="icon-btn" id="hub-back" aria-label="Back to all tools" data-tip="All tools" data-tip-side="bottom"><svg class="icon"><use href="#i-chev-left"/></svg></button>
+      <h2 id="hub-title">Tools</h2>
+      <span class="spacer"></span>
+      <button class="icon-btn" id="hub-close" aria-label="Close tools" data-tip="Close (Esc)" data-tip-side="bottom"><svg class="icon"><use href="#i-x"/></svg></button>
+    </div>
+
+    <div class="hub">
+      <nav class="hub-nav" id="hub-nav" aria-label="All tools">
+        <button class="hub-link" data-hub="hub-convert" data-title="Convert">
+          <svg class="icon"><use href="#i-swap"/></svg>
+          <span><b>Convert</b><small>Word, Excel, PowerPoint, images, HTML, Markdown</small></span>
+          <svg class="icon sm go"><use href="#i-chev-right"/></svg>
+        </button>
+        <button class="hub-link" data-hub="hub-create" data-title="Make a PDF">
+          <svg class="icon"><use href="#i-file-plus"/></svg>
+          <span><b>Make a PDF</b><small>From images, Word, Excel, CSV or text</small></span>
+          <svg class="icon sm go"><use href="#i-chev-right"/></svg>
+        </button>
+        <button class="hub-link" data-hub="hub-organise" data-title="Merge &amp; split">
+          <svg class="icon"><use href="#i-layers"/></svg>
+          <span><b>Merge &amp; split</b><small>Join PDFs together, or cut this one up</small></span>
+          <svg class="icon sm go"><use href="#i-chev-right"/></svg>
+        </button>
+        <button class="hub-link" data-hub="hub-size" data-title="Compress">
+          <svg class="icon"><use href="#i-compress"/></svg>
+          <span><b>Compress</b><small>Make the file smaller</small></span>
+          <svg class="icon sm go"><use href="#i-chev-right"/></svg>
+        </button>
+        <button class="hub-link" data-hub="hub-layout" data-title="Page layout">
+          <svg class="icon"><use href="#i-layout"/></svg>
+          <span><b>Page layout</b><small>Resize, crop, several pages per sheet, reorder</small></span>
+          <svg class="icon sm go"><use href="#i-chev-right"/></svg>
+        </button>
+        <button class="hub-link" data-hub="hub-mark" data-title="Watermark &amp; numbering">
+          <svg class="icon"><use href="#i-droplet"/></svg>
+          <span><b>Watermark &amp; numbering</b><small>Watermarks, headers, footers, page and Bates numbers</small></span>
+          <svg class="icon sm go"><use href="#i-chev-right"/></svg>
+        </button>
+        <button class="hub-link" data-hub="hub-security" data-title="Protect">
+          <svg class="icon"><use href="#i-lock"/></svg>
+          <span><b>Protect</b><small>Passwords, permissions, strip scripts, flatten forms</small></span>
+          <svg class="icon sm go"><use href="#i-chev-right"/></svg>
+        </button>
+        <button class="hub-link" data-hub="hub-info" data-title="Details">
+          <svg class="icon"><use href="#i-info"/></svg>
+          <span><b>Details</b><small>Title, author, keywords, attachments</small></span>
+          <svg class="icon sm go"><use href="#i-chev-right"/></svg>
+        </button>
+      </nav>
+
+      <div class="hub-body">
+        <!-- Convert -->
+        <section class="hub-pane hidden" id="hub-convert">
+          <h3>Turn this PDF into</h3>
+          <div class="format-grid" id="format-grid">
+            <button class="fmt" data-format="docx"><b>Word</b><span>.docx</span></button>
+            <button class="fmt" data-format="xlsx"><b>Excel</b><span>.xlsx</span></button>
+            <button class="fmt" data-format="pptx"><b>PowerPoint</b><span>.pptx</span></button>
+            <button class="fmt" data-format="images"><b>Images</b><span>.png / .jpg</span></button>
+            <button class="fmt" data-format="html"><b>Web page</b><span>.html</span></button>
+            <button class="fmt" data-format="md"><b>Markdown</b><span>.md</span></button>
+            <button class="fmt" data-format="txt"><b>Plain text</b><span>.txt</span></button>
+            <button class="fmt" data-format="csv"><b>CSV</b><span>.csv</span></button>
+            <button class="fmt" data-format="json"><b>JSON</b><span>structured</span></button>
+            <button class="fmt" data-format="embeddedImages"><b>Pictures</b><span>.zip</span></button>
+          </div>
+
+          <div class="opt-block" id="opt-docx">
+            <label>Layout
+              <select id="docx-mode">
+                <option value="flow">Flowing text — best for editing</option>
+                <option value="layout">Keep the visual layout — best for looks</option>
+              </select>
+            </label>
+            <label class="chk"><input type="checkbox" id="docx-tables" checked> Rebuild detected tables</label>
+            <label class="chk"><input type="checkbox" id="docx-background"> Keep the page picture behind the text (layout mode)</label>
+          </div>
+
+          <div class="opt-block hidden" id="opt-xlsx">
+            <label>Rows
+              <select id="xlsx-mode">
+                <option value="tables">Detected tables</option>
+                <option value="lines">One row per line of text</option>
+                <option value="single">Everything on one sheet</option>
+              </select>
+            </label>
+            <label class="chk"><input type="checkbox" id="xlsx-numbers" checked> Convert numeric-looking cells to numbers</label>
+          </div>
+
+          <div class="opt-block hidden" id="opt-pptx">
+            <label>Slides
+              <select id="pptx-mode">
+                <option value="overlay">Page picture with editable text on top</option>
+                <option value="image">Page picture only</option>
+                <option value="text">Editable text only</option>
+              </select>
+            </label>
+            <label>Picture quality <input type="range" id="pptx-dpi" min="72" max="220" step="2" value="130"> <span class="val"><span id="pptx-dpi-v">130</span> DPI</span></label>
+          </div>
+
+          <div class="opt-block hidden" id="opt-images">
+            <label>Format
+              <select id="img-format">
+                <option value="png">PNG — lossless</option>
+                <option value="jpeg">JPEG — smaller</option>
+                <option value="webp">WebP</option>
+              </select>
+            </label>
+            <label>Resolution <input type="range" id="img-dpi" min="72" max="400" step="2" value="150"> <span class="val"><span id="img-dpi-v">150</span> DPI</span></label>
+            <label>Quality <input type="range" id="img-quality" min="40" max="100" step="1" value="90"> <span class="val" id="img-quality-v">90</span></label>
+          </div>
+
+          <div class="opt-block hidden" id="opt-html">
+            <label>Style
+              <select id="html-mode">
+                <option value="flow">Readable article</option>
+                <option value="exact">Positioned, page for page</option>
+              </select>
+            </label>
+            <label class="chk"><input type="checkbox" id="html-background"> Embed page pictures (positioned mode)</label>
+          </div>
+
+          <div class="opt-block hidden" id="opt-json">
+            <label class="chk"><input type="checkbox" id="json-items"> Include every individual text run</label>
+          </div>
+
+          <details class="more-opts">
+            <summary>Scanned pages and clean-up</summary>
+            <div class="opt-block">
+              <label class="chk"><input type="checkbox" id="ocr-enable" checked> Read scanned pages with OCR</label>
+              <label>Language
+                <select id="ocr-langs">
+                  <option value="eng+ben">English and Bengali</option>
+                  <option value="eng">English only</option>
+                  <option value="ben">Bengali only</option>
+                </select>
+              </label>
+              <label>Detail
+                <select id="ocr-dpi">
+                  <option value="150">Faster (150 DPI)</option>
+                  <option value="200" selected>Balanced (200 DPI)</option>
+                  <option value="300">Careful (300 DPI)</option>
+                </select>
+              </label>
+              <p class="tiny muted">Only pages with no text of their own are read this way, and it is slow — around a second a page. Everything happens on your machine.</p>
+            </div>
+            <div class="opt-block" id="opt-flow">
+              <label class="chk"><input type="checkbox" id="convert-running" checked> Leave out repeated page headers, footers and page numbers</label>
+            </div>
+          </details>
+
+          <div class="opt-block">
+            <label>Pages <input type="text" id="convert-range" placeholder="all — or 1-3, 8, 12-" value=""></label>
+          </div>
+          <button class="btn primary wide" id="btn-convert-run">Convert</button>
+          <p class="tiny muted">A PDF stores positioned glyphs, not paragraphs or tables — those are reconstructed here, so check the result before sending it on.</p>
+        </section>
+
+        <!-- Create -->
+        <section class="hub-pane hidden" id="hub-create">
+          <h3>Build a PDF from</h3>
+          <div class="stack">
+            <button class="btn" id="btn-from-images"><svg class="icon"><use href="#i-image"/></svg><span>Images</span></button>
+            <button class="btn" id="btn-from-office"><svg class="icon"><use href="#i-file"/></svg><span>Word, Excel or CSV</span></button>
+            <button class="btn" id="btn-from-text"><svg class="icon"><use href="#i-text"/></svg><span>A text file</span></button>
+          </div>
+          <div class="opt-block">
+            <label>Page size
+              <select id="create-size">
+                <option value="fit">Match each image</option>
+                <option value="A4">A4</option>
+                <option value="Letter">Letter</option>
+                <option value="A3">A3</option>
+                <option value="A5">A5</option>
+                <option value="Legal">Legal</option>
+              </select>
+            </label>
+            <label>Orientation
+              <select id="create-orientation">
+                <option value="auto">Automatic</option>
+                <option value="portrait">Portrait</option>
+                <option value="landscape">Landscape</option>
+              </select>
+            </label>
+            <label>Margin <span class="val"><input type="number" id="create-margin" min="0" max="120" step="2" value="0"> pt</span></label>
+          </div>
+          <p class="tiny muted">Word and spreadsheet conversion carries text, styling and tables — not floating images, headers or exact pagination.</p>
+        </section>
+
+        <!-- Merge & split -->
+        <section class="hub-pane hidden" id="hub-organise">
+          <h3>Merge</h3>
+          <button class="btn" id="btn-merge-add"><svg class="icon"><use href="#i-plus"/></svg><span>Add PDFs…</span></button>
+          <p class="tiny muted">The open document is always first.</p>
+          <ol class="filelist" id="merge-list"></ol>
+          <button class="btn primary wide" id="btn-merge-run" disabled>Merge into one PDF</button>
+
+          <h3>Split</h3>
+          <div class="opt-block">
+            <label>How
+              <select id="split-mode">
+                <option value="single">One file per page</option>
+                <option value="every">Every N pages</option>
+                <option value="at">Break before these pages</option>
+              </select>
+            </label>
+            <label class="hidden" id="split-size-wrap">N <input type="number" id="split-size" min="1" max="500" value="2"></label>
+            <label class="hidden" id="split-at-wrap">Pages <input type="text" id="split-at" placeholder="4, 9, 15"></label>
+          </div>
+          <button class="btn wide" id="btn-split-run">Split into a ZIP</button>
+        </section>
+
+        <!-- Page layout -->
+        <section class="hub-pane hidden" id="hub-layout">
+          <h3>Page size</h3>
+          <div class="opt-block">
+            <label>Target
+              <select id="page-preset">
+                <option value="pct">Custom scale (%)</option>
+                <option value="A3">A3</option>
+                <option value="A4">A4</option>
+                <option value="A5">A5</option>
+                <option value="Letter">Letter</option>
+                <option value="Legal">Legal</option>
+              </select>
+            </label>
+            <label id="page-scale-wrap">Scale <span class="val"><input type="number" id="page-scale" min="10" max="400" step="5" value="100"> %</span></label>
+          </div>
+          <button class="btn wide" id="btn-page-run">Create resized PDF</button>
+
+          <h3>Several pages per sheet</h3>
+          <div class="opt-block">
+            <label>Pages per sheet
+              <select id="nup-count">
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="6">6</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+                <option value="16">16</option>
+              </select>
+            </label>
+            <label>Sheet
+              <select id="nup-size">
+                <option value="A4">A4</option>
+                <option value="Letter">Letter</option>
+                <option value="A3">A3</option>
+              </select>
+            </label>
+            <label class="chk"><input type="checkbox" id="nup-border"> Outline each page</label>
+          </div>
+          <button class="btn wide" id="btn-nup-run">Create</button>
+
+          <h3>Crop</h3>
+          <div class="opt-block two">
+            <label>Top <span class="val"><input type="number" id="crop-top" min="0" max="45" step="1" value="0"> %</span></label>
+            <label>Bottom <span class="val"><input type="number" id="crop-bottom" min="0" max="45" step="1" value="0"> %</span></label>
+            <label>Left <span class="val"><input type="number" id="crop-left" min="0" max="45" step="1" value="0"> %</span></label>
+            <label>Right <span class="val"><input type="number" id="crop-right" min="0" max="45" step="1" value="0"> %</span></label>
+            <label class="chk span"><input type="checkbox" id="crop-hard"> Also trim the media box</label>
+          </div>
+          <button class="btn wide" id="btn-crop-run">Crop pages</button>
+
+          <h3>Order</h3>
+          <div class="stack">
+            <button class="btn" id="btn-reverse">Reverse page order</button>
+            <button class="btn" id="btn-rotate-all">Rotate every page 90°</button>
+          </div>
+        </section>
+
+        <!-- Watermark & numbering -->
+        <section class="hub-pane hidden" id="hub-mark">
+          <h3>Watermark</h3>
+          <div class="opt-block">
+            <label>Source
+              <select id="wm-type">
+                <option value="text">Text</option>
+                <option value="image">Image</option>
+              </select>
+            </label>
+            <label id="wm-text-wrap">Text <input type="text" id="wm-text" value="CONFIDENTIAL"></label>
+            <button class="mini hidden" id="wm-image-btn">Choose image…</button>
+            <label>Colour <span class="swatch"><input type="color" id="wm-color" value="#ff2d55"></span></label>
+            <label>Size <input type="range" id="wm-size" min="10" max="160" step="2" value="54"> <span class="val" id="wm-size-v">54</span></label>
+            <label>Opacity <input type="range" id="wm-opacity" min="5" max="100" step="5" value="18"> <span class="val"><span id="wm-opacity-v">18</span>%</span></label>
+            <label>Angle <input type="range" id="wm-rotation" min="-90" max="90" step="5" value="45"> <span class="val"><span id="wm-rotation-v">45</span>°</span></label>
+            <label>Position
+              <select id="wm-position">
+                <option value="center">Centre</option>
+                <option value="top-left">Top left</option>
+                <option value="top-center">Top centre</option>
+                <option value="top-right">Top right</option>
+                <option value="bottom-left">Bottom left</option>
+                <option value="bottom-center">Bottom centre</option>
+                <option value="bottom-right">Bottom right</option>
+              </select>
+            </label>
+            <label class="chk"><input type="checkbox" id="wm-tile"> Repeat across the page</label>
+            <label class="chk"><input type="checkbox" id="wm-behind"> Place behind the page content</label>
+            <label>Pages <input type="text" id="wm-range" placeholder="all"></label>
+          </div>
+          <button class="btn primary wide" id="btn-wm-run">Apply watermark</button>
+
+          <h3>Headers, footers and page numbers</h3>
+          <div class="opt-block">
+            <div class="hf-grid">
+              <span class="hf-label">Header</span>
+              <input type="text" id="hf-h-left" placeholder="left" aria-label="Header, left">
+              <input type="text" id="hf-h-center" placeholder="centre" aria-label="Header, centre">
+              <input type="text" id="hf-h-right" placeholder="right" aria-label="Header, right">
+              <span class="hf-label">Footer</span>
+              <input type="text" id="hf-f-left" placeholder="left" aria-label="Footer, left">
+              <input type="text" id="hf-f-center" placeholder="centre" value="{page} / {pages}" aria-label="Footer, centre">
+              <input type="text" id="hf-f-right" placeholder="right" aria-label="Footer, right">
+            </div>
+            <p class="tiny muted">Tokens: <code>{page}</code> <code>{pages}</code> <code>{date}</code> <code>{time}</code> <code>{filename}</code> <code>{bates}</code></p>
+            <label>Size <input type="number" id="hf-size" min="6" max="24" step="0.5" value="9"></label>
+            <label>Colour <span class="swatch"><input type="color" id="hf-color" value="#4a4f5a"></span></label>
+            <label>Margin <span class="val"><input type="number" id="hf-margin" min="8" max="80" step="2" value="28"> pt</span></label>
+            <label>First number <input type="number" id="hf-start" min="1" step="1" value="1"></label>
+            <label class="chk"><input type="checkbox" id="hf-skip-first"> Skip the first page</label>
+            <label>Bates prefix <input type="text" id="hf-bates-prefix" placeholder="ABC-" size="8"></label>
+            <label>Bates start <input type="number" id="hf-bates-start" min="0" step="1" value="1"></label>
+            <label>Digits <input type="number" id="hf-bates-digits" min="1" max="12" step="1" value="6"></label>
+          </div>
+          <button class="btn primary wide" id="btn-hf-run">Apply</button>
+        </section>
+
+        <!-- Compress -->
+        <section class="hub-pane hidden" id="hub-size">
+          <h3>File size</h3>
+          <div class="opt-block">
+            <label class="chk"><input type="checkbox" id="cmp-lossless"> Lossless re-save only (keeps text selectable, smaller gains)</label>
+            <div id="cmp-lossy" class="opt-sub">
+              <label>Preset
+                <select id="cmp-preset">
+                  <option value="150,0.85">High quality (150 DPI)</option>
+                  <option value="120,0.75" selected>Balanced (120 DPI)</option>
+                  <option value="96,0.62">Small (96 DPI)</option>
+                  <option value="72,0.5">Tiny (72 DPI)</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label class="hidden" id="cmp-custom-dpi">DPI <input type="range" id="cmp-dpi" min="72" max="220" step="2" value="120"> <span class="val" id="cmp-dpi-v">120</span></label>
+              <label class="hidden" id="cmp-custom-q">JPEG quality <input type="range" id="cmp-quality" min="40" max="95" step="1" value="75"> <span class="val" id="cmp-quality-v">75</span></label>
+            </div>
+          </div>
+          <button class="btn primary wide" id="btn-cmp-run">Create compressed PDF</button>
+          <p class="tiny muted">Rasterising is what buys the big reduction — it also makes text unselectable. Use the lossless option when that matters.</p>
+        </section>
+
+        <!-- Document details -->
+        <section class="hub-pane hidden" id="hub-info">
+          <h3>Metadata</h3>
+          <div class="opt-block form-grid">
+            <label>Title <input type="text" id="meta-title"></label>
+            <label>Author <input type="text" id="meta-author"></label>
+            <label>Subject <input type="text" id="meta-subject"></label>
+            <label>Keywords <input type="text" id="meta-keywords" placeholder="comma separated"></label>
+            <label>Creator <input type="text" id="meta-creator"></label>
+            <label>Producer <input type="text" id="meta-producer"></label>
+          </div>
+          <div class="stack row">
+            <button class="btn" id="btn-meta-load">Reload</button>
+            <button class="btn primary" id="btn-meta-save">Apply metadata</button>
+          </div>
+
+          <h3>Attachments</h3>
+          <div class="stack row">
+            <button class="btn" id="btn-attach-add">Attach a file…</button>
+            <button class="btn" id="btn-attach-list">List attachments</button>
+          </div>
+          <ul class="filelist" id="attach-list"></ul>
+        </section>
+
+        <!-- Security -->
+        <section class="hub-pane hidden" id="hub-security">
+          <h3>Protect with a password</h3>
+          <div class="opt-block">
+            <label>Open password <input type="password" id="sec-user-pw" autocomplete="new-password"></label>
+            <label>Owner password <input type="password" id="sec-owner-pw" autocomplete="new-password"></label>
+            <label>Encryption
+              <select id="sec-scheme">
+                <option value="aes256">AES-256 — strongest, needs a modern reader</option>
+                <option value="aes128">AES-128 — widely compatible</option>
+                <option value="rc4">RC4 128-bit — legacy readers only</option>
+              </select>
+            </label>
+            <div class="perm-grid">
+              <label class="chk"><input type="checkbox" id="perm-print" checked> Printing</label>
+              <label class="chk"><input type="checkbox" id="perm-printHighRes" checked> High-res printing</label>
+              <label class="chk"><input type="checkbox" id="perm-modify" checked> Changing the document</label>
+              <label class="chk"><input type="checkbox" id="perm-copy" checked> Copying text</label>
+              <label class="chk"><input type="checkbox" id="perm-annotate" checked> Commenting</label>
+              <label class="chk"><input type="checkbox" id="perm-fillForms" checked> Filling forms</label>
+              <label class="chk"><input type="checkbox" id="perm-assemble" checked> Reordering pages</label>
+              <label class="chk"><input type="checkbox" id="perm-accessibility" checked> Screen-reader access</label>
+            </div>
+          </div>
+          <button class="btn primary wide" id="btn-encrypt-run">Create protected PDF</button>
+          <p class="tiny muted"><b>Note:</b> permission flags are advisory — every PDF reader is free to ignore them. Only the open password actually keeps a document shut. RC4 is offered for old readers and is not considered secure.</p>
+
+          <h3>Remove a password</h3>
+          <div class="opt-block">
+            <label>Current password <input type="password" id="sec-remove-pw" autocomplete="off"></label>
+          </div>
+          <button class="btn wide" id="btn-decrypt-run">Remove protection</button>
+
+          <h3>Clean up</h3>
+          <div class="stack">
+            <button class="btn" id="btn-sanitize-run">Strip scripts, actions and embedded files</button>
+            <button class="btn" id="btn-flatten-run">Flatten form fields</button>
+          </div>
+        </section>
       </div>
     </div>
-    <div id="pages"></div>
-  </main>
+
+    <!-- What a job is doing, and what it made, stay in view at the foot. -->
+    <div class="drawer-foot">
+      <div class="progress hidden" id="hub-progress">
+        <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-labelledby="hub-text"><div id="hub-bar"></div></div>
+        <span id="hub-text">Working…</span>
+        <button class="mini" id="hub-cancel">Cancel</button>
+      </div>
+      <p class="job-notes hidden" id="hub-notes"></p>
+      <div class="result hidden" id="result-row">
+        <svg class="icon"><use href="#i-check"/></svg>
+        <span id="result-text"></span>
+        <button class="btn ghost hidden" id="btn-result-load">Open in editor</button>
+        <button class="btn primary" id="btn-result-download"><svg class="icon"><use href="#i-download"/></svg><span>Download</span></button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Actions for the selected object, carried by the object. -->
+<div class="selbar hidden" id="selbar" role="toolbar" aria-label="Selected object">
+  <button class="icon-btn sm hidden" id="btn-replace-img" aria-label="Replace this picture" data-tip="Replace" data-tip-side="top"><svg class="icon sm"><use href="#i-swap"/></svg></button>
+  <button class="icon-btn sm hidden" id="btn-duplicate-obj" aria-label="Duplicate" data-tip="Duplicate (Ctrl+D)" data-tip-side="top"><svg class="icon sm"><use href="#i-copy"/></svg></button>
+  <button class="icon-btn sm danger hidden" id="btn-delete-obj" aria-label="Delete" data-tip="Delete (Del)" data-tip-side="top"><svg class="icon sm"><use href="#i-trash"/></svg></button>
+</div>
+
+<!-- Shown over everything while a file is being dragged in. -->
+<div class="drop-veil" id="drop-veil" aria-hidden="true">
+  <div><svg class="icon lg"><use href="#i-download"/></svg><b>Drop to open</b><span>PDF, pictures, Word, Excel or text</span></div>
 </div>
 
 <!-- ============ Signature modal ============ -->
 <div class="modal-wrap hidden" id="sig-modal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="sig-heading">
     <div class="modal-head">
-      <h2>Signature</h2>
-      <button class="x" id="sig-close" title="Close">✕</button>
+      <h2 id="sig-heading">Signature</h2>
+      <button class="icon-btn x" id="sig-close" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
     </div>
 
-    <div class="tabs">
-      <button class="tab active" data-pane="sig-pane-draw">Draw</button>
-      <button class="tab" data-pane="sig-pane-type">Type</button>
-      <button class="tab" data-pane="sig-pane-upload">Upload &amp; clean up</button>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-pane="sig-pane-draw" role="tab">Draw</button>
+      <button class="tab" data-pane="sig-pane-type" role="tab">Type</button>
+      <button class="tab" data-pane="sig-pane-upload" role="tab">Upload &amp; clean up</button>
     </div>
 
     <div class="pane" id="sig-pane-draw">
@@ -274,6 +855,7 @@
           </select>
         </label>
         <label>Thickness <input type="range" id="sig-pen-size" min="1" max="6" step="0.5" value="2.5"></label>
+        <span class="spacer"></span>
         <button class="mini" id="sig-clear">Clear</button>
       </div>
     </div>
@@ -334,424 +916,17 @@
   </div>
 </div>
 
-<!-- ============ Workbench ============ -->
-<div class="modal-wrap hidden" id="hub-modal">
-  <div class="modal wide">
-    <div class="modal-head">
-      <h2>Workbench</h2>
-      <button class="x" id="hub-close" title="Close">✕</button>
-    </div>
-
-    <div class="hub">
-      <nav class="hub-nav" id="hub-nav">
-        <button class="hub-link active" data-hub="hub-convert">Convert from PDF</button>
-        <button class="hub-link" data-hub="hub-create">Create a PDF</button>
-        <button class="hub-link" data-hub="hub-organise">Merge &amp; split</button>
-        <button class="hub-link" data-hub="hub-layout">Page layout</button>
-        <button class="hub-link" data-hub="hub-mark">Watermark &amp; numbering</button>
-        <button class="hub-link" data-hub="hub-size">Resize &amp; compress</button>
-        <button class="hub-link" data-hub="hub-info">Document details</button>
-        <button class="hub-link" data-hub="hub-security">Security</button>
-      </nav>
-
-      <div class="hub-body">
-        <!-- Convert -->
-        <section class="hub-pane" id="hub-convert">
-          <h3>Turn this PDF into another format</h3>
-          <div class="format-grid" id="format-grid">
-            <button class="fmt" data-format="docx"><b>Word</b><span>.docx</span></button>
-            <button class="fmt" data-format="xlsx"><b>Excel</b><span>.xlsx</span></button>
-            <button class="fmt" data-format="pptx"><b>PowerPoint</b><span>.pptx</span></button>
-            <button class="fmt" data-format="images"><b>Images</b><span>.png / .jpg</span></button>
-            <button class="fmt" data-format="html"><b>Web page</b><span>.html</span></button>
-            <button class="fmt" data-format="md"><b>Markdown</b><span>.md</span></button>
-            <button class="fmt" data-format="txt"><b>Plain text</b><span>.txt</span></button>
-            <button class="fmt" data-format="csv"><b>CSV</b><span>.csv</span></button>
-            <button class="fmt" data-format="json"><b>JSON</b><span>structured</span></button>
-            <button class="fmt" data-format="embeddedImages"><b>Extract images</b><span>.zip</span></button>
-          </div>
-
-          <div class="opt-block" id="opt-docx">
-            <label>Layout
-              <select id="docx-mode">
-                <option value="flow">Flowing text — best for editing</option>
-                <option value="layout">Keep the visual layout — best for looks</option>
-              </select>
-            </label>
-            <label class="chk"><input type="checkbox" id="docx-tables" checked> Rebuild detected tables</label>
-            <label class="chk"><input type="checkbox" id="docx-background"> Keep the page picture behind the text (layout mode)</label>
-          </div>
-
-          <div class="opt-block hidden" id="opt-xlsx">
-            <label>Rows
-              <select id="xlsx-mode">
-                <option value="tables">Detected tables</option>
-                <option value="lines">One row per line of text</option>
-                <option value="single">Everything on one sheet</option>
-              </select>
-            </label>
-            <label class="chk"><input type="checkbox" id="xlsx-numbers" checked> Convert numeric-looking cells to numbers</label>
-          </div>
-
-          <div class="opt-block hidden" id="opt-pptx">
-            <label>Slides
-              <select id="pptx-mode">
-                <option value="overlay">Page picture with editable text on top</option>
-                <option value="image">Page picture only</option>
-                <option value="text">Editable text only</option>
-              </select>
-            </label>
-            <label>Picture quality <input type="range" id="pptx-dpi" min="72" max="220" step="2" value="130"> <span id="pptx-dpi-v">130</span> DPI</label>
-          </div>
-
-          <div class="opt-block hidden" id="opt-images">
-            <label>Format
-              <select id="img-format">
-                <option value="png">PNG — lossless</option>
-                <option value="jpeg">JPEG — smaller</option>
-                <option value="webp">WebP</option>
-              </select>
-            </label>
-            <label>Resolution <input type="range" id="img-dpi" min="72" max="400" step="2" value="150"> <span id="img-dpi-v">150</span> DPI</label>
-            <label>Quality <input type="range" id="img-quality" min="40" max="100" step="1" value="90"> <span id="img-quality-v">90</span></label>
-          </div>
-
-          <div class="opt-block hidden" id="opt-html">
-            <label>Style
-              <select id="html-mode">
-                <option value="flow">Readable article</option>
-                <option value="exact">Positioned, page for page</option>
-              </select>
-            </label>
-            <label class="chk"><input type="checkbox" id="html-background"> Embed page pictures (positioned mode)</label>
-          </div>
-
-          <div class="opt-block hidden" id="opt-json">
-            <label class="chk"><input type="checkbox" id="json-items"> Include every individual text run</label>
-          </div>
-
-          <div class="opt-block">
-            <label class="chk"><input type="checkbox" id="ocr-enable" checked> Read scanned pages with OCR</label>
-            <div class="row">
-              <label>Language
-                <select id="ocr-langs">
-                  <option value="eng+ben">English and Bengali</option>
-                  <option value="eng">English only</option>
-                  <option value="ben">Bengali only</option>
-                </select>
-              </label>
-              <label>Detail
-                <select id="ocr-dpi">
-                  <option value="150">Faster (150 DPI)</option>
-                  <option value="200" selected>Balanced (200 DPI)</option>
-                  <option value="300">Careful (300 DPI)</option>
-                </select>
-              </label>
-            </div>
-            <p class="tiny muted">Only pages with no text of their own are read this way, and it is slow — around a second a page. Everything happens on your machine.</p>
-          </div>
-
-          <div class="opt-block" id="opt-flow">
-            <label class="chk"><input type="checkbox" id="convert-running" checked> Leave out repeated page headers, footers and page numbers</label>
-          </div>
-
-          <div class="row">
-            <label class="grow">Pages <input type="text" id="convert-range" placeholder="all — or 1-3, 8, 12-" value=""></label>
-            <button class="btn primary" id="btn-convert-run">Convert</button>
-          </div>
-          <p class="tiny muted">A PDF stores positioned glyphs, not paragraphs or tables — those are reconstructed here, so check the result before sending it on.</p>
-        </section>
-
-        <!-- Create -->
-        <section class="hub-pane hidden" id="hub-create">
-          <h3>Build a PDF from other files</h3>
-          <div class="row">
-            <button class="btn" id="btn-from-images">Images → PDF</button>
-            <button class="btn" id="btn-from-office">Word / Excel / CSV → PDF</button>
-            <button class="btn" id="btn-from-text">Text file → PDF</button>
-          </div>
-          <div class="opt-block">
-            <label>Page size
-              <select id="create-size">
-                <option value="fit">Match each image</option>
-                <option value="A4">A4</option>
-                <option value="Letter">Letter</option>
-                <option value="A3">A3</option>
-                <option value="A5">A5</option>
-                <option value="Legal">Legal</option>
-              </select>
-            </label>
-            <label>Orientation
-              <select id="create-orientation">
-                <option value="auto">Automatic</option>
-                <option value="portrait">Portrait</option>
-                <option value="landscape">Landscape</option>
-              </select>
-            </label>
-            <label>Margin <input type="number" id="create-margin" min="0" max="120" step="2" value="0"> pt</label>
-          </div>
-          <p class="tiny muted">Word and spreadsheet conversion carries text, styling and tables — not floating images, headers or exact pagination.</p>
-        </section>
-
-        <!-- Merge & split -->
-        <section class="hub-pane hidden" id="hub-organise">
-          <h3>Merge</h3>
-          <div class="row">
-            <button class="btn" id="btn-merge-add">Add PDFs…</button>
-            <span class="tiny muted">The open document is always first.</span>
-          </div>
-          <ol class="filelist" id="merge-list"></ol>
-          <div class="row">
-            <button class="btn primary" id="btn-merge-run" disabled>Merge into one PDF</button>
-          </div>
-
-          <h3>Split</h3>
-          <div class="opt-block">
-            <label>How
-              <select id="split-mode">
-                <option value="single">One file per page</option>
-                <option value="every">Every N pages</option>
-                <option value="at">Break before these pages</option>
-              </select>
-            </label>
-            <label class="hidden" id="split-size-wrap">N <input type="number" id="split-size" min="1" max="500" value="2"></label>
-            <label class="hidden" id="split-at-wrap">Pages <input type="text" id="split-at" placeholder="4, 9, 15"></label>
-            <button class="btn" id="btn-split-run">Split into a ZIP</button>
-          </div>
-        </section>
-
-        <!-- Page layout -->
-        <section class="hub-pane hidden" id="hub-layout">
-          <h3>Page size</h3>
-          <div class="opt-block">
-            <label>Target
-              <select id="page-preset">
-                <option value="pct">Custom scale (%)</option>
-                <option value="A3">A3</option>
-                <option value="A4">A4</option>
-                <option value="A5">A5</option>
-                <option value="Letter">Letter</option>
-                <option value="Legal">Legal</option>
-              </select>
-            </label>
-            <label id="page-scale-wrap">Scale <input type="number" id="page-scale" min="10" max="400" step="5" value="100"> %</label>
-            <button class="btn" id="btn-page-run">Create resized PDF</button>
-          </div>
-
-          <h3>Several pages per sheet</h3>
-          <div class="opt-block">
-            <label>Pages per sheet
-              <select id="nup-count">
-                <option value="2">2</option>
-                <option value="4">4</option>
-                <option value="6">6</option>
-                <option value="8">8</option>
-                <option value="9">9</option>
-                <option value="16">16</option>
-              </select>
-            </label>
-            <label>Sheet
-              <select id="nup-size">
-                <option value="A4">A4</option>
-                <option value="Letter">Letter</option>
-                <option value="A3">A3</option>
-              </select>
-            </label>
-            <label class="chk"><input type="checkbox" id="nup-border"> Outline each page</label>
-            <button class="btn" id="btn-nup-run">Create</button>
-          </div>
-
-          <h3>Crop</h3>
-          <div class="opt-block">
-            <label>Top <input type="number" id="crop-top" min="0" max="45" step="1" value="0"> %</label>
-            <label>Bottom <input type="number" id="crop-bottom" min="0" max="45" step="1" value="0"> %</label>
-            <label>Left <input type="number" id="crop-left" min="0" max="45" step="1" value="0"> %</label>
-            <label>Right <input type="number" id="crop-right" min="0" max="45" step="1" value="0"> %</label>
-            <label class="chk"><input type="checkbox" id="crop-hard"> Also trim the media box</label>
-            <button class="btn" id="btn-crop-run">Crop pages</button>
-          </div>
-
-          <h3>Order</h3>
-          <div class="opt-block">
-            <button class="btn" id="btn-reverse">Reverse page order</button>
-            <button class="btn" id="btn-rotate-all">Rotate every page 90°</button>
-          </div>
-        </section>
-
-        <!-- Watermark & numbering -->
-        <section class="hub-pane hidden" id="hub-mark">
-          <h3>Watermark</h3>
-          <div class="opt-block">
-            <label>Source
-              <select id="wm-type">
-                <option value="text">Text</option>
-                <option value="image">Image</option>
-              </select>
-            </label>
-            <label class="grow" id="wm-text-wrap">Text <input type="text" id="wm-text" value="CONFIDENTIAL"></label>
-            <button class="mini hidden" id="wm-image-btn">Choose image…</button>
-            <label>Color <input type="color" id="wm-color" value="#ff2d55"></label>
-            <label>Size <input type="range" id="wm-size" min="10" max="160" step="2" value="54"> <span id="wm-size-v">54</span></label>
-            <label>Opacity <input type="range" id="wm-opacity" min="5" max="100" step="5" value="18"> <span id="wm-opacity-v">18</span>%</label>
-            <label>Angle <input type="range" id="wm-rotation" min="-90" max="90" step="5" value="45"> <span id="wm-rotation-v">45</span>°</label>
-            <label>Position
-              <select id="wm-position">
-                <option value="center">Centre</option>
-                <option value="top-left">Top left</option>
-                <option value="top-center">Top centre</option>
-                <option value="top-right">Top right</option>
-                <option value="bottom-left">Bottom left</option>
-                <option value="bottom-center">Bottom centre</option>
-                <option value="bottom-right">Bottom right</option>
-              </select>
-            </label>
-            <label class="chk"><input type="checkbox" id="wm-tile"> Repeat across the page</label>
-            <label class="chk"><input type="checkbox" id="wm-behind"> Place behind the page content</label>
-            <label class="grow">Pages <input type="text" id="wm-range" placeholder="all"></label>
-            <button class="btn primary" id="btn-wm-run">Apply watermark</button>
-          </div>
-
-          <h3>Headers, footers and page numbers</h3>
-          <div class="opt-block">
-            <div class="hf-grid">
-              <span class="hf-label">Header</span>
-              <input type="text" id="hf-h-left" placeholder="left">
-              <input type="text" id="hf-h-center" placeholder="centre">
-              <input type="text" id="hf-h-right" placeholder="right">
-              <span class="hf-label">Footer</span>
-              <input type="text" id="hf-f-left" placeholder="left">
-              <input type="text" id="hf-f-center" placeholder="centre" value="{page} / {pages}">
-              <input type="text" id="hf-f-right" placeholder="right">
-            </div>
-            <p class="tiny muted">Tokens: <code>{page}</code> <code>{pages}</code> <code>{date}</code> <code>{time}</code> <code>{filename}</code> <code>{bates}</code></p>
-            <label>Size <input type="number" id="hf-size" min="6" max="24" step="0.5" value="9"></label>
-            <label>Color <input type="color" id="hf-color" value="#4a4f5a"></label>
-            <label>Margin <input type="number" id="hf-margin" min="8" max="80" step="2" value="28"> pt</label>
-            <label>First number <input type="number" id="hf-start" min="1" step="1" value="1"></label>
-            <label class="chk"><input type="checkbox" id="hf-skip-first"> Skip the first page</label>
-            <label>Bates prefix <input type="text" id="hf-bates-prefix" placeholder="ABC-" size="8"></label>
-            <label>Bates start <input type="number" id="hf-bates-start" min="0" step="1" value="1"></label>
-            <label>Digits <input type="number" id="hf-bates-digits" min="1" max="12" step="1" value="6"></label>
-            <button class="btn primary" id="btn-hf-run">Apply</button>
-          </div>
-        </section>
-
-        <!-- Resize & compress -->
-        <section class="hub-pane hidden" id="hub-size">
-          <h3>File size</h3>
-          <div class="opt-block">
-            <label class="chk"><input type="checkbox" id="cmp-lossless"> Lossless re-save only (keeps text selectable, smaller gains)</label>
-            <div id="cmp-lossy" class="opt-sub">
-              <label>Preset
-                <select id="cmp-preset">
-                  <option value="150,0.85">High quality (150 DPI)</option>
-                  <option value="120,0.75" selected>Balanced (120 DPI)</option>
-                  <option value="96,0.62">Small (96 DPI)</option>
-                  <option value="72,0.5">Tiny (72 DPI)</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </label>
-              <label class="hidden" id="cmp-custom-dpi">DPI <input type="range" id="cmp-dpi" min="72" max="220" step="2" value="120"> <span id="cmp-dpi-v">120</span></label>
-              <label class="hidden" id="cmp-custom-q">JPEG quality <input type="range" id="cmp-quality" min="40" max="95" step="1" value="75"> <span id="cmp-quality-v">75</span></label>
-            </div>
-            <button class="btn primary" id="btn-cmp-run">Create compressed PDF</button>
-          </div>
-          <p class="tiny muted">Rasterising is what buys the big reduction — it also makes text unselectable. Use the lossless option when that matters.</p>
-        </section>
-
-        <!-- Document details -->
-        <section class="hub-pane hidden" id="hub-info">
-          <h3>Metadata</h3>
-          <div class="opt-block form-grid">
-            <label>Title <input type="text" id="meta-title"></label>
-            <label>Author <input type="text" id="meta-author"></label>
-            <label>Subject <input type="text" id="meta-subject"></label>
-            <label>Keywords <input type="text" id="meta-keywords" placeholder="comma separated"></label>
-            <label>Creator <input type="text" id="meta-creator"></label>
-            <label>Producer <input type="text" id="meta-producer"></label>
-          </div>
-          <div class="row">
-            <button class="btn" id="btn-meta-load">Reload from document</button>
-            <button class="btn primary" id="btn-meta-save">Apply metadata</button>
-          </div>
-
-          <h3>Attachments</h3>
-          <div class="row">
-            <button class="btn" id="btn-attach-add">Attach a file…</button>
-            <button class="btn" id="btn-attach-list">List attachments</button>
-          </div>
-          <ul class="filelist" id="attach-list"></ul>
-        </section>
-
-        <!-- Security -->
-        <section class="hub-pane hidden" id="hub-security">
-          <h3>Protect with a password</h3>
-          <div class="opt-block">
-            <label>Open password <input type="password" id="sec-user-pw" autocomplete="new-password"></label>
-            <label>Owner password <input type="password" id="sec-owner-pw" autocomplete="new-password"></label>
-            <label>Encryption
-              <select id="sec-scheme">
-                <option value="aes256">AES-256 — strongest, needs a modern reader</option>
-                <option value="aes128">AES-128 — widely compatible</option>
-                <option value="rc4">RC4 128-bit — legacy readers only</option>
-              </select>
-            </label>
-            <div class="perm-grid">
-              <label class="chk"><input type="checkbox" id="perm-print" checked> Printing</label>
-              <label class="chk"><input type="checkbox" id="perm-printHighRes" checked> High-resolution printing</label>
-              <label class="chk"><input type="checkbox" id="perm-modify" checked> Changing the document</label>
-              <label class="chk"><input type="checkbox" id="perm-copy" checked> Copying text</label>
-              <label class="chk"><input type="checkbox" id="perm-annotate" checked> Commenting</label>
-              <label class="chk"><input type="checkbox" id="perm-fillForms" checked> Filling forms</label>
-              <label class="chk"><input type="checkbox" id="perm-assemble" checked> Reordering pages</label>
-              <label class="chk"><input type="checkbox" id="perm-accessibility" checked> Screen-reader access</label>
-            </div>
-            <button class="btn primary" id="btn-encrypt-run">Create protected PDF</button>
-          </div>
-          <p class="tiny muted"><b>Note:</b> permission flags are advisory — every PDF reader is free to ignore them. Only the open password actually keeps a document shut. RC4 is offered for old readers and is not considered secure.</p>
-
-          <h3>Remove a password</h3>
-          <div class="opt-block">
-            <label>Current password <input type="password" id="sec-remove-pw" autocomplete="off"></label>
-            <button class="btn" id="btn-decrypt-run">Remove protection</button>
-          </div>
-
-          <h3>Clean up</h3>
-          <div class="opt-block">
-            <button class="btn" id="btn-sanitize-run">Strip scripts, actions and embedded files</button>
-            <button class="btn" id="btn-flatten-run">Flatten form fields</button>
-          </div>
-        </section>
-      </div>
-    </div>
-
-    <div class="progress hidden" id="hub-progress">
-      <div class="bar"><div id="hub-bar"></div></div>
-      <span id="hub-text">Working…</span>
-      <button class="mini" id="hub-cancel">Cancel</button>
-    </div>
-    <p class="job-notes hidden" id="hub-notes"></p>
-
-    <div class="section result hidden" id="result-row">
-      <span id="result-text"></span>
-      <span class="spacer"></span>
-      <button class="btn ghost hidden" id="btn-result-load">Load into the editor</button>
-      <button class="btn primary" id="btn-result-download">Download</button>
-    </div>
-  </div>
-</div>
-
 <!-- ============ Stamp modal ============ -->
 <div class="modal-wrap hidden" id="stamp-modal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="stamp-heading">
     <div class="modal-head">
-      <h2>Stamp</h2>
-      <button class="x" id="stamp-close" title="Close">✕</button>
+      <h2 id="stamp-heading">Stamp</h2>
+      <button class="icon-btn x" id="stamp-close" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
     </div>
     <div class="stamp-grid" id="stamp-grid"></div>
     <div class="row">
       <label class="grow">Custom text <input type="text" id="stamp-custom" placeholder="Type your own"></label>
-      <label>Color <input type="color" id="stamp-color" value="#d92d20"></label>
+      <label>Colour <span class="swatch"><input type="color" id="stamp-color" value="#d92d20"></span></label>
       <label class="chk"><input type="checkbox" id="stamp-date"> Add today's date</label>
     </div>
     <div class="modal-foot">
@@ -764,13 +939,13 @@
 
 <!-- ============ Password prompt ============ -->
 <div class="modal-wrap hidden" id="pw-modal">
-  <div class="modal narrow">
+  <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="pw-heading">
     <div class="modal-head">
-      <h2>This PDF is protected</h2>
+      <h2 id="pw-heading">This PDF is protected</h2>
     </div>
-    <p class="tiny muted">Enter the password to open it. It is used only in this tab.</p>
+    <p class="ask-text">Enter the password to open it. It is used only in this tab.</p>
     <div class="row">
-      <input type="password" id="pw-input" class="grow" autocomplete="off" placeholder="Password">
+      <input type="password" id="pw-input" class="grow" autocomplete="off" placeholder="Password" aria-label="Password">
     </div>
     <p class="tiny danger hidden" id="pw-error">That password did not work.</p>
     <div class="modal-foot">
@@ -788,7 +963,8 @@
       <h2 id="ask-title"></h2>
     </div>
     <p class="ask-text" id="ask-text"></p>
-    <textarea id="ask-input" class="hidden" rows="5" placeholder="Type here — Ctrl+Enter to save"></textarea>
+    <textarea id="ask-input" class="hidden" rows="5" placeholder="Type here — Ctrl+Enter to save" aria-labelledby="ask-title"></textarea>
+    <input type="text" id="ask-line" class="hidden" aria-labelledby="ask-title">
     <div class="modal-foot">
       <span class="spacer"></span>
       <button class="btn" id="ask-cancel">Cancel</button>
@@ -799,12 +975,24 @@
 
 <!-- ============ Shortcuts ============ -->
 <div class="modal-wrap hidden" id="keys-modal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="keys-heading">
     <div class="modal-head">
-      <h2>Keyboard shortcuts</h2>
-      <button class="x" id="keys-close" title="Close">✕</button>
+      <h2 id="keys-heading">Keyboard shortcuts</h2>
+      <button class="icon-btn x" id="keys-close" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
     </div>
     <div class="keys" id="keys-list"></div>
+  </div>
+</div>
+
+<!-- ============ Command palette ============ -->
+<div class="palette-wrap hidden" id="palette">
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Search actions">
+    <div class="palette-head">
+      <svg class="icon"><use href="#i-search"/></svg>
+      <input type="text" id="palette-input" placeholder="Search tools and actions, or type a page number…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+      <kbd>Esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Actions"></div>
   </div>
 </div>
 
@@ -833,5 +1021,6 @@
 <script src="contentedit.js"></script>
 <script src="editor.js"></script>
 <script src="ui.js"></script>
+<script src="palette.js"></script>
 </body>
 </html>

@@ -1,0 +1,176 @@
+/*
+ * Design tokens, shared by the editor and the toolbar popup.
+ *
+ * Interface colours only. Anything that belongs to the document itself — the
+ * page, whiteout, redaction, highlights, the signature pad — keeps its literal
+ * colour in both themes, because a whiteout that renders dark or a redaction
+ * that renders light would lie about what the file will contain.
+ *
+ * Every pairing of text on surface used in the interface is at least 4.5:1.
+ */
+:root {
+  /* surfaces, from the furthest back to the nearest */
+  --bg: #f5f6f8;
+  --desk: #eaecf1;
+  --surface: #ffffff;
+  --surface-2: #f3f4f7;
+  --surface-3: #e8eaef;
+  --border: #dfe2e9;
+  --border-strong: #c2c7d2;
+
+  --text: #171a21;
+  --muted: #586172;
+  --faint: #8b93a2;
+
+  --accent: #3f5fe0;
+  --accent-strong: #3350c8;
+  --accent-text: #3350c8;
+  --accent-soft: rgba(63, 95, 224, 0.1);
+  --accent-faint: rgba(63, 95, 224, 0.06);
+  --accent-ring: rgba(63, 95, 224, 0.42);
+  --on-accent: #ffffff;
+
+  --ok: #0f7a54;
+  --ok-soft: rgba(15, 122, 84, 0.09);
+  --ok-line: rgba(15, 122, 84, 0.3);
+  --warn: #8a5a00;
+  --warn-soft: rgba(176, 116, 0, 0.1);
+  --danger: #c22f3a;
+  --danger-soft: rgba(194, 47, 58, 0.09);
+  --danger-line: rgba(194, 47, 58, 0.34);
+
+  --scrim: rgba(18, 22, 31, 0.38);
+  --glass: rgba(255, 255, 255, 0.86);
+
+  /* depth */
+  --shadow-1: 0 1px 2px rgba(20, 26, 40, 0.07), 0 1px 1px rgba(20, 26, 40, 0.04);
+  --shadow-2: 0 4px 14px rgba(20, 26, 40, 0.1), 0 1px 3px rgba(20, 26, 40, 0.06);
+  --shadow-3: 0 16px 44px rgba(20, 26, 40, 0.18), 0 3px 10px rgba(20, 26, 40, 0.08);
+  --shadow-page: 0 1px 3px rgba(20, 26, 40, 0.1), 0 8px 28px rgba(20, 26, 40, 0.1);
+
+  /* space, on a 4px step */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+
+  --r-1: 6px;
+  --r-2: 8px;
+  --r-3: 12px;
+  --r-4: 16px;
+  --r-full: 999px;
+
+  /* type */
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --t-xs: 11.5px;
+  --t-sm: 12.5px;
+  --t-md: 13.5px;
+  --t-lg: 15px;
+  --t-xl: 19px;
+
+  /* sizes that have to agree with each other */
+  --appbar-h: 48px;
+  --strip-h: 44px;
+  --rail-w: 52px;
+  --panel-w: 248px;
+  --drawer-w: 388px;
+  --hit: 32px;
+
+  /* motion */
+  --dur-1: 120ms;
+  --dur-2: 180ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent-ring);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #101216;
+  --desk: #16181e;
+  --surface: #1a1d24;
+  --surface-2: #21252e;
+  --surface-3: #2a2f3a;
+  --border: #2b303b;
+  --border-strong: #3d4454;
+
+  --text: #e8eaf0;
+  --muted: #a0a8b9;
+  --faint: #727b8d;
+
+  --accent: #6585ff;
+  --accent-strong: #7a96ff;
+  --accent-text: #9db1ff;
+  --accent-soft: rgba(101, 133, 255, 0.16);
+  --accent-faint: rgba(101, 133, 255, 0.08);
+  --accent-ring: rgba(101, 133, 255, 0.5);
+  --on-accent: #0c1020;
+
+  --ok: #3fcf96;
+  --ok-soft: rgba(63, 207, 150, 0.1);
+  --ok-line: rgba(63, 207, 150, 0.34);
+  --warn: #e9b949;
+  --warn-soft: rgba(233, 185, 73, 0.12);
+  --danger: #f07178;
+  --danger-soft: rgba(240, 113, 120, 0.12);
+  --danger-line: rgba(240, 113, 120, 0.4);
+
+  --scrim: rgba(5, 6, 9, 0.6);
+  --glass: rgba(26, 29, 36, 0.88);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.42), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-3: 0 18px 48px rgba(0, 0, 0, 0.58), 0 3px 10px rgba(0, 0, 0, 0.35);
+  --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(0, 0, 0, 0.4);
+
+  color-scheme: dark;
+}
+
+/* Nothing moves for someone who has asked that nothing move. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+  }
+  *, *::before, *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.hidden { display: none !important; }
+
+/* Read by a screen reader, not shown. */
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Icons come from one sprite and take the colour of the text they sit in. */
+.icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.icon.sm { width: 15px; height: 15px; }
+.icon.lg { width: 22px; height: 22px; }
+.icon .fill { fill: currentColor; stroke: none; }

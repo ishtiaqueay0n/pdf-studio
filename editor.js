@@ -220,27 +220,146 @@ const curScale = () => state.fitScale * state.zoom;
 
 /* ============================== status ui ============================== */
 
-let bannerTimer = null;
+/** An icon from the sprite in editor.html, as an element. */
+function icon(name, extra) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'icon' + (extra ? ' ' + extra : ''));
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(NS, 'use');
+  use.setAttribute('href', '#i-' + name);
+  svg.appendChild(use);
+  return svg;
+}
 
-function showBanner(msg, type) {
-  clearTimeout(bannerTimer);
+/*
+ * Messages.
+ *
+ * Each is a small card at the bottom corner of the document. Something that
+ * went wrong stays until it is dismissed, because it has to be read; a
+ * confirmation or a hint leaves on its own, and waits while the pointer is on
+ * it. The same message said twice restarts its clock instead of piling up.
+ *
+ * `opts.action` — { label, run } — puts a button on the card: "Undo".
+ */
+const TOAST_LIFE = 6500;
+const TOAST_MAX = 4;
+
+function dismissToast(el) {
+  if (!el || el.dataset.leaving) return;
+  el.dataset.leaving = '1';
+  clearTimeout(el.psTimer);
+  el.classList.add('leaving');
+  setTimeout(() => el.remove(), 200);
+}
+
+function showBanner(msg, type, opts) {
   if (!msg) {
-    bannerEl.classList.add('hidden');
+    for (const el of Array.from(bannerEl.children)) dismissToast(el);
     return;
   }
-  bannerEl.textContent = msg;
-  bannerEl.title = 'Click to dismiss';
-  bannerEl.classList.toggle('info', type === 'info');
-  bannerEl.classList.toggle('ok', type === 'ok');
-  bannerEl.classList.remove('hidden');
-  if (type === 'ok' || type === 'info') {
-    bannerTimer = setTimeout(() => bannerEl.classList.add('hidden'), 7000);
+  const kind = type === 'ok' ? 'ok' : type === 'info' ? 'info' : 'error';
+  for (const el of Array.from(bannerEl.children)) {
+    if (el.dataset.msg === msg) el.remove();
+  }
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.dataset.msg = msg;
+  el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  el.appendChild(icon(kind === 'ok' ? 'check' : kind === 'info' ? 'info' : 'alert'));
+  const text = document.createElement('div');
+  text.className = 'toast-text';
+  text.textContent = msg;
+  el.appendChild(text);
+  const action = opts && opts.action;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.addEventListener('click', () => { dismissToast(el); action.run(); });
+    el.appendChild(b);
+  }
+  const close = document.createElement('button');
+  close.className = 'icon-btn';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.appendChild(icon('x', 'sm'));
+  close.addEventListener('click', () => dismissToast(el));
+  el.appendChild(close);
+
+  bannerEl.appendChild(el);
+  while (bannerEl.children.length > TOAST_MAX) bannerEl.firstElementChild.remove();
+  if (kind !== 'error') {
+    const life = (opts && opts.life) || TOAST_LIFE;
+    const arm = () => { el.psTimer = setTimeout(() => dismissToast(el), life); };
+    el.addEventListener('pointerenter', () => clearTimeout(el.psTimer));
+    el.addEventListener('pointerleave', arm);
+    arm();
   }
 }
-bannerEl.addEventListener('click', () => showBanner(null));
+
+/*
+ * The line at the top says which document is open. Once there is one, its
+ * name stands apart from the rest — pages, size — because the name is the one
+ * part that can be changed: it is what the saved file will be called.
+ */
+const docNameEl = $('#doc-name');
 
 function setMeta(text) {
-  metaEl.textContent = text;
+  const named = !!state.doc && text.indexOf(state.name + ' · ') === 0;
+  docNameEl.classList.toggle('hidden', !named);
+  if (named) {
+    docNameEl.textContent = state.name;
+    metaEl.textContent = text.slice(state.name.length + 3);
+  } else {
+    metaEl.textContent = text;
+  }
+}
+
+docNameEl.addEventListener('click', async () => {
+  if (!state.doc) return;
+  const typed = await textDialog({
+    title: 'File name',
+    text: 'The name the PDF is saved under.',
+    value: state.name.replace(/\.pdf$/i, ''),
+    ok: 'Rename',
+    single: true
+  });
+  const name = typed == null ? '' : typed.trim();
+  if (!name) return;
+  state.name = safeFileName(/\.pdf$/i.test(name) ? name : name + '.pdf');
+  document.title = state.name + ' — PDF Studio';
+  setMeta(metaText());
+  syncDirty();
+});
+
+/*
+ * The words on a button. Most buttons are an icon and a label side by side, so
+ * "Working…" is written into the label rather than over the whole button —
+ * which would take the icon with it, for good.
+ */
+function buttonLabel(button, text) {
+  const holder = button.querySelector('span') || button;
+  if (text === undefined) return holder.textContent;
+  holder.textContent = text;
+  return text;
+}
+
+/** A thin moving line under the app bar while something slow is going on. */
+let busyCount = 0;
+function setBusy(on) {
+  busyCount = Math.max(0, busyCount + (on ? 1 : -1));
+  document.body.classList.toggle('busy', busyCount > 0);
+}
+
+/** Keep the unsaved-changes mark, on the page and in the tab, in step. */
+function syncDirty() {
+  document.body.dataset.dirty = state.dirty ? 'true' : 'false';
+  if (state.doc) document.title = (state.dirty ? '• ' : '') + state.name + ' — PDF Studio';
+}
+
+function setDirty(value) {
+  state.dirty = !!value;
+  syncDirty();
 }
 
 function needDoc() {
@@ -250,7 +369,7 @@ function needDoc() {
 }
 
 const TOOL_HINTS = {
-  select: '',
+  select: 'Click anything you added to move or resize it · double-click text or a picture on the page to edit it',
   text: 'Click on a page to add a text box',
   draw: 'Draw directly on the page',
   highlight: 'Drag across the text you want to highlight',
@@ -269,7 +388,7 @@ function setTool(t) {
   for (const b of toolBtns) b.classList.toggle('active', b.dataset.tool === t);
   pagesEl.className = '';
   pagesEl.classList.add('tool-' + t);
-  hintEl.textContent = TOOL_HINTS[t] || '';
+  hintEl.textContent = state.doc ? (TOOL_HINTS[t] || '') : 'Open a PDF to start — drop one anywhere, or press Ctrl+O';
   refreshImageMarks();
   refreshTextMarks();
   updateCtx();
@@ -297,6 +416,7 @@ function updateCtx() {
   } else if (kind === 'highlight') {
     hlColorInput.value = sel.color;
     hlOpacityInput.value = Math.round(sel.opacity * 100);
+    paintChips(hlColorInput, $('#hl-chips'));
   }
   if (sel && sel.type === 'text') {
     textSizeInput.value = Math.round(sel.size * 10) / 10;
@@ -353,6 +473,7 @@ async function loadFromUrl(u) {
     return;
   }
   setMeta('Fetching PDF…');
+  setBusy(true);
   try {
     const res = await fetch(u, { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -370,6 +491,8 @@ async function loadFromUrl(u) {
       showBanner('Could not fetch this PDF (' + ((err && err.message) || err) + '). Download it and open the file here instead.');
     }
     setMeta('No document loaded');
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -442,6 +565,15 @@ async function unlockForEditing(bytes, password) {
  *                        work in this tab rather than a file as it was opened
  */
 async function loadBytes(bytes, name, opts) {
+  setBusy(true);
+  try {
+    return await openBytes(bytes, name, opts);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function openBytes(bytes, name, opts) {
   showBanner(null);
   setMeta('Opening…');
   let opened;
@@ -475,8 +607,7 @@ async function loadBytes(bytes, name, opts) {
   forgetPageImages();
   forgetPageParagraphs();
   resetHistory();
-  state.dirty = !!(opts && opts.dirty);
-  document.title = state.name + ' — PDF Studio';
+  setDirty(opts && opts.dirty);
   state.place = null;
   state.zoom = 1;
   state.currentPage = 1;
@@ -498,10 +629,10 @@ async function loadBytes(bytes, name, opts) {
   if (state.locked) {
     showBanner('This document stays encrypted: its structure cannot be rewritten here, so editing ' +
       'and saving are switched off. Reading, searching and converting still work — or use ' +
-      'Workbench → Security → Remove a password to rebuild it as an unprotected copy.');
+      'Tools → Protect → Remove a password to rebuild it as an unprotected copy.');
   } else if (state.wasProtected) {
     showBanner('This document was password-protected. It has been unlocked for editing — use ' +
-      'Workbench → Security to protect the copy you save.', 'info');
+      'Tools → Protect to protect the copy you save.', 'info');
   }
   document.dispatchEvent(new CustomEvent('ps:document-loaded'));
 }
@@ -547,11 +678,11 @@ async function buildPages() {
         redrawInk(idx);
         if (state.tool === 'pictures') markPageImages(idx);
         if (state.tool === 'edittext') markPageParagraphs(idx);
-        if (en.intersectionRatio > 0.4) setCurrentPage(idx + 1);
       } else {
         scheduleEviction();
       }
     }
+    syncCurrentPage();
   }, { root: viewerEl, rootMargin: '600px 0px', threshold: [0, 0.45] });
 
   const fragment = document.createDocumentFragment();
@@ -784,14 +915,21 @@ function captureAnchor(point) {
     if (d < bestD) { bestD = d; best = { p, r }; }
   }
   if (!best || !best.r.width || !best.r.height) return null;
-  return { p: best.p, fx: (x - best.r.left) / best.r.width, fy: (y - best.r.top) / best.r.height, x, y };
+  return {
+    p: best.p, fx: (x - best.r.left) / best.r.width, fy: (y - best.r.top) / best.r.height, x, y,
+    // At the very top, with no pointer to zoom about, the top is what is being
+    // looked at. Holding the middle instead would creep down the page each time
+    // a panel opened and closed again.
+    top: !point && viewerEl.scrollTop < 2
+  };
 }
 
 function restoreAnchor(a) {
   if (!a) return;
   const r = a.p.wrap.getBoundingClientRect();
   viewerEl.scrollLeft += r.left + a.fx * r.width - a.x;
-  viewerEl.scrollTop += r.top + a.fy * r.height - a.y;
+  if (a.top) viewerEl.scrollTop = 0;
+  else viewerEl.scrollTop += r.top + a.fy * r.height - a.y;
 }
 
 /** Lay out again, keeping what the reader was looking at where it was. */
@@ -820,9 +958,35 @@ function fitWidth() {
   restoreAnchor(anchor);
 }
 
+/** Zoom so one whole page fits the height of the viewer. */
+function fitPage() {
+  const p = state.pages[state.currentPage - 1];
+  if (!p) return;
+  updateFitScale();
+  const room = Math.max(120, viewerEl.clientHeight - 56);
+  setZoom(room / (p.viewport1.height * state.fitScale));
+}
+
+/** Zoom so a point on the page is a point on the screen. */
+function actualSize() {
+  if (!state.doc) return;
+  updateFitScale();
+  setZoom((96 / 72) / state.fitScale);
+}
+
 $('#zoom-in').addEventListener('click', () => setZoom(state.zoom * 1.15));
 $('#zoom-out').addEventListener('click', () => setZoom(state.zoom / 1.15));
 $('#zoom-fit').addEventListener('click', fitWidth);
+for (const item of $$('#zoom-menu [data-zoom]')) {
+  item.addEventListener('click', () => {
+    closeMenu();
+    const z = item.dataset.zoom;
+    if (z === 'fit-width') fitWidth();
+    else if (z === 'fit-page') fitPage();
+    else if (z === 'actual') actualSize();
+    else setZoom(parseFloat(z));
+  });
+}
 
 // Ctrl + wheel, which is also what a pinch on a trackpad arrives as, zooms
 // about the pointer rather than about the top of the document.
@@ -842,6 +1006,38 @@ function setCurrentPage(n) {
   const thumb = $('.thumb[data-index="' + (n - 1) + '"]');
   if (thumb) thumb.classList.add('current');
 }
+
+/*
+ * The page being read is the one under a line a third of the way down the
+ * viewer — not whichever page last came near the screen, which on a small
+ * zoom is the page after the one in front of the reader. At either end of the
+ * document it is the first or the last page, which may never reach that line.
+ */
+function syncCurrentPage() {
+  const near = state.pages.filter((p) => p.visible);
+  if (!near.length) return;
+  if (viewerEl.scrollTop < 2) { setCurrentPage(near[0].index + 1); return; }
+  if (viewerEl.scrollTop + viewerEl.clientHeight >= viewerEl.scrollHeight - 2) {
+    setCurrentPage(near[near.length - 1].index + 1);
+    return;
+  }
+  const box = viewerEl.getBoundingClientRect();
+  const y = box.top + box.height / 3;
+  let best = null, bestD = Infinity;
+  for (const p of near) {
+    const r = p.wrap.getBoundingClientRect();
+    const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  if (best) setCurrentPage(best.index + 1);
+}
+
+let pageSyncQueued = false;
+viewerEl.addEventListener('scroll', () => {
+  if (pageSyncQueued) return;
+  pageSyncQueued = true;
+  requestAnimationFrame(() => { pageSyncQueued = false; syncCurrentPage(); });
+}, { passive: true });
 
 function goToPage(n) {
   const p = state.pages[clamp(n, 1, state.pages.length) - 1];
@@ -863,21 +1059,78 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(() => { updateFitScale(); relayout(); }, 200);
 });
 
-$('#btn-sidebar').addEventListener('click', () => {
-  sidebarEl.classList.toggle('collapsed');
-  $('#btn-sidebar').classList.toggle('on', !sidebarEl.classList.contains('collapsed'));
+/** Show or hide the side panel; the document takes up or gives back the room. */
+function setSidebar(open) {
+  sidebarEl.classList.toggle('collapsed', !open);
+  for (const tab of $$('.side-tab')) {
+    tab.setAttribute('aria-selected', String(open && tab.classList.contains('active')));
+  }
   setTimeout(() => { updateFitScale(); relayout(); }, 0);
+}
+$('#btn-sidebar').addEventListener('click', () => setSidebar(sidebarEl.classList.contains('collapsed')));
+
+/*
+ * In a narrow window the side panel floats over the document instead of
+ * sitting beside it (the same 980px as in editor.css). There it starts put
+ * away, and steps aside again when a wide window is narrowed past that point;
+ * opened by hand, it stays until it is closed.
+ */
+const NARROW_WINDOW = 980;
+let wasNarrow = window.innerWidth < NARROW_WINDOW;
+if (wasNarrow) setSidebar(false);
+window.addEventListener('resize', () => {
+  const narrow = window.innerWidth < NARROW_WINDOW;
+  if (narrow && !wasNarrow && !sidebarEl.classList.contains('collapsed')) setSidebar(false);
+  wasNarrow = narrow;
 });
-$('#btn-sidebar').classList.add('on');
+
+/*
+ * Menus: the "more" menu in the app bar and the zoom presets in the dock.
+ * One is open at a time; a click anywhere else, Escape, or choosing something
+ * closes it.
+ */
+let openMenu = null;
+
+function closeMenu() {
+  if (!openMenu) return;
+  openMenu.menu.classList.add('hidden');
+  openMenu.button.setAttribute('aria-expanded', 'false');
+  openMenu = null;
+}
+
+function toggleMenu(button, menu) {
+  const again = openMenu && openMenu.menu === menu;
+  closeMenu();
+  if (again) return;
+  menu.classList.remove('hidden');
+  button.setAttribute('aria-expanded', 'true');
+  openMenu = { button, menu };
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (openMenu && !openMenu.menu.contains(e.target) && !openMenu.button.contains(e.target)) closeMenu();
+});
+$('#btn-more').addEventListener('click', () => toggleMenu($('#btn-more'), $('#more-menu')));
+$('#zoom-label').addEventListener('click', () => toggleMenu($('#zoom-label'), $('#zoom-menu')));
 
 // The interface theme. Separate from night mode below, which inverts the
 // document rather than the interface.
-PSTheme.register($('#btn-theme'));
+for (const b of $$('[data-theme-set]')) {
+  b.addEventListener('click', () => PSTheme.set(b.dataset.themeSet));
+}
+function paintThemeChoice() {
+  for (const b of $$('[data-theme-set]')) {
+    b.setAttribute('aria-checked', String(b.dataset.themeSet === PSTheme.mode()));
+  }
+}
+PSTheme.onChange(paintThemeChoice);
+paintThemeChoice();
 
 $('#btn-night').addEventListener('click', () => {
   state.night = !state.night;
   document.body.classList.toggle('night', state.night);
   $('#btn-night').classList.toggle('on', state.night);
+  $('#btn-night').setAttribute('aria-checked', String(state.night));
 });
 
 function setPresent(on) {
@@ -891,7 +1144,9 @@ function setPresent(on) {
   }
   setTimeout(() => { updateFitScale(); layoutAll(); }, 60);
 }
-$('#btn-present').addEventListener('click', () => setPresent(!state.present));
+$('#btn-present').addEventListener('click', () => { closeMenu(); setPresent(!state.present); });
+$('#btn-keys').addEventListener('click', () => { closeMenu(); openModal(keysModal); });
+$('#quick-keys').addEventListener('click', () => openModal(keysModal));
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement && state.present) setPresent(false);
 });
@@ -933,7 +1188,7 @@ function commit() {
   history.stack.push(snapshotObjects());
   if (history.stack.length > history.limit) history.stack.shift();
   history.index = history.stack.length - 1;
-  state.dirty = true;
+  setDirty(true);
   refreshHistoryButtons();
   document.dispatchEvent(new CustomEvent('ps:objects-changed'));
 }
@@ -992,7 +1247,7 @@ function restoreObjects(snapshot) {
   if (again) select(again);
   refreshImageMarks();
   refreshTextMarks();
-  state.dirty = true;
+  setDirty(true);
   refreshHistoryButtons();
   document.dispatchEvent(new CustomEvent('ps:objects-changed'));
 }
@@ -1183,36 +1438,87 @@ function applyObjectLayout(o) {
   } else {
     o.el.style.height = (o.h * S) + 'px';
   }
-  if (o.type === 'shape') o.el.innerHTML = shapeSvg(o);
+  if (o.type === 'shape') {
+    // Only the drawing is replaced; the resize handles beside it stay.
+    const old = o.el.querySelector('svg');
+    if (old) old.remove();
+    o.el.insertAdjacentHTML('afterbegin', shapeSvg(o));
+  }
   if (o.type === 'stamp') {
     const box = o.el.querySelector('.stamp-box');
     if (box) box.style.fontSize = (o.h * 0.42 * S) + 'px';
   }
+  if (o === state.selection) positionSelbar();
+}
+
+/*
+ * Which handles an object is resized by. A text box only has a width to
+ * change — its height follows its words — so it gets one each side. A sticky
+ * note is a fixed-size marker and gets none. Everything else is pulled by its
+ * corners.
+ */
+function handlesFor(o) {
+  if (o.type === 'note') return [];
+  if (o.type === 'text') return ['w', 'e'];
+  return ['nw', 'ne', 'sw', 'se'];
+}
+
+const selbarEl = $('#selbar');
+// A press on the bar must not reach the page under it, which would read it as
+// a click on empty paper and drop the selection.
+selbarEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+selbarEl.addEventListener('dblclick', (e) => e.stopPropagation());
+
+/**
+ * Put the selected object's own actions beside it: above its top-right
+ * corner, or below it when there is no room above. The bar lives inside the
+ * page's overlay, so it scrolls and zooms with the page without being told.
+ */
+function positionSelbar() {
+  const o = state.selection;
+  const p = o && state.pages[o.pageIndex];
+  if (!o || !o.el || !p) {
+    selbarEl.classList.add('hidden');
+    return;
+  }
+  if (selbarEl.parentNode !== p.overlay) p.overlay.appendChild(selbarEl);
+  selbarEl.classList.remove('hidden');
+  const S = curScale();
+  const pageW = p.viewport1.width * S, pageH = p.viewport1.height * S;
+  const barW = selbarEl.offsetWidth, barH = selbarEl.offsetHeight;
+  const top = o.y * S - barH - 10;
+  const below = (o.y + o.h) * S + 10;
+  selbarEl.style.top = (top >= 0 ? top : Math.min(below, pageH - barH)) + 'px';
+  selbarEl.style.left = clamp((o.x + o.w) * S - barW, 0, Math.max(0, pageW - barW)) + 'px';
 }
 
 function select(o) {
-  if (state.selection === o) { updateCtx(); return; }
+  if (state.selection === o) { updateCtx(); positionSelbar(); return; }
   clearSelection();
   state.selection = o;
   if (o && o.el) {
     o.el.classList.add('selected');
-    const h = document.createElement('div');
-    h.className = 'handle';
-    h.addEventListener('pointerdown', (e) => beginResize(e, o));
-    o.el.appendChild(h);
+    for (const corner of handlesFor(o)) {
+      const h = document.createElement('div');
+      h.className = 'handle';
+      h.dataset.corner = corner;
+      h.addEventListener('pointerdown', (e) => beginResize(e, o, corner));
+      o.el.appendChild(h);
+    }
   }
   updateCtx();
+  positionSelbar();
 }
 
 function clearSelection() {
   const o = state.selection;
   if (o && o.el) {
     o.el.classList.remove('selected');
-    const h = o.el.querySelector('.handle');
-    if (h) h.remove();
+    for (const h of o.el.querySelectorAll('.handle')) h.remove();
   }
   state.selection = null;
   updateCtx();
+  positionSelbar();
 }
 
 function deleteObject(id, opts) {
@@ -1261,12 +1567,16 @@ function beginDrag(e, o) {
   const move = (ev) => {
     o.x = clamp(ox + (ev.clientX - sx) / S, -o.w * 0.5, p.viewport1.width - o.w * 0.5);
     o.y = clamp(oy + (ev.clientY - sy) / S, -o.h * 0.5, p.viewport1.height - o.h * 0.5);
+    // Out of the way while the object is on the move; back when it lands.
+    if (o.x !== ox || o.y !== oy) selbarEl.classList.add('dragging');
     applyObjectLayout(o);
   };
   const up = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
     window.removeEventListener('pointercancel', up);
+    selbarEl.classList.remove('dragging');
+    positionSelbar();
     if (o.x !== ox || o.y !== oy) commit();
   };
   window.addEventListener('pointermove', move);
@@ -1274,32 +1584,44 @@ function beginDrag(e, o) {
   window.addEventListener('pointercancel', up);
 }
 
-function beginResize(e, o) {
+/**
+ * Resize from a handle. `corner` says which — 'nw', 'ne', 'sw', 'se', or 'w' /
+ * 'e' for the sides of a text box — and the opposite corner stays where it is.
+ * Pictures keep their proportions.
+ */
+function beginResize(e, o, corner) {
   if (e.button !== 0) return;
   e.stopPropagation();
   e.preventDefault();
   const S = curScale();
-  const sx = e.clientX, sy = e.clientY, ow = o.w, oh = o.h;
+  const pull = corner || 'se';
+  const west = pull.includes('w'), north = pull.includes('n'), south = pull.includes('s');
+  const sx = e.clientX, sy = e.clientY, ox = o.x, oy = o.y, ow = o.w, oh = o.h;
   const ratio = oh / ow;
   const move = (ev) => {
-    const nw = Math.max(8, ow + (ev.clientX - sx) / S);
-    const nh = Math.max(6, oh + (ev.clientY - sy) / S);
+    const dx = (ev.clientX - sx) / S, dy = (ev.clientY - sy) / S;
+    let nw = Math.max(o.type === 'text' ? 40 : 8, ow + (west ? -dx : dx));
+    let nh = oh;
     if (o.type === 'image' || o.type === 'sig') {
-      o.w = nw;
-      o.h = nw * ratio;
-    } else if (o.type === 'text') {
-      o.w = Math.max(40, nw);
-    } else {
-      o.w = nw;
-      o.h = nh;
+      nh = nw * ratio;
+    } else if (o.type !== 'text') {
+      nh = Math.max(6, oh + (north ? -dy : south ? dy : 0));
     }
+    o.w = nw;
+    if (o.type !== 'text') o.h = nh;
+    // Whatever was not pulled stays put: the far edge is the anchor.
+    o.x = west ? ox + ow - nw : ox;
+    if (o.type !== 'text') o.y = north ? oy + oh - nh : oy;
     applyObjectLayout(o);
   };
+  selbarEl.classList.add('dragging');
   const up = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
     window.removeEventListener('pointercancel', up);
-    if (o.w !== ow || o.h !== oh) commit();
+    selbarEl.classList.remove('dragging');
+    positionSelbar();
+    if (o.w !== ow || o.h !== oh || o.x !== ox || o.y !== oy) commit();
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
@@ -1896,8 +2218,82 @@ sigTypeColor.addEventListener('change', () => renderTypedSignature(false));
 
 /* ============================== modals ============================== */
 
-function openModal(el) { el.classList.remove('hidden'); }
-function closeModal(el) { el.classList.add('hidden'); }
+const drawerEl = $('#hub-modal');
+// `a[href]`, not `[href]`: every icon is a <use href>, which cannot take focus.
+const FOCUSABLE = 'button:not(:disabled), a[href], input:not(:disabled):not([type="hidden"]), ' +
+  'select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+const modalReturn = new Map();   // dialog -> what had focus before it opened
+
+function visibleFocusables(el) {
+  // Only what Tab would stop at: the rows of the action search are buttons,
+  // but they are reached with the arrow keys and Tab passes them by.
+  return $$(FOCUSABLE, el).filter((n) => n.tabIndex >= 0 && n.getClientRects().length > 0);
+}
+
+/**
+ * Show a dialog, or the Tools drawer.
+ *
+ * A dialog takes the keyboard with it — focus moves inside and Tab goes round
+ * within it — and gives it back to wherever it was when it closes. The drawer
+ * is not a dialog: the document beside it stays live, so it only makes room.
+ */
+function openModal(el) {
+  const wasOpen = !el.classList.contains('hidden');
+  el.classList.remove('hidden');
+  if (el === drawerEl) {
+    $('#btn-workbench').setAttribute('aria-expanded', 'true');
+    if (!wasOpen) {
+      // On a narrow window the drawer and the side panel together leave the
+      // document a sliver; the panel steps aside for the drawer.
+      if (window.innerWidth < 1180 && !sidebarEl.classList.contains('collapsed')) setSidebar(false);
+      else setTimeout(() => { updateFitScale(); relayout(); }, 0);
+    }
+    return;
+  }
+  if (wasOpen) return;
+  closeMenu();
+  modalReturn.set(el, document.activeElement);
+  // Dialogs that put the caret somewhere particular do so themselves, a
+  // moment later; this is the fallback for the ones that do not.
+  setTimeout(() => {
+    if (el.classList.contains('hidden') || el.contains(document.activeElement)) return;
+    // The close button is the last choice, but it is a choice: a dialog with
+    // nothing else in it still has to take the keyboard.
+    const nodes = visibleFocusables(el);
+    const first = nodes.find((n) => !n.classList.contains('x')) || nodes[0];
+    if (first) first.focus();
+  }, 40);
+}
+
+function closeModal(el) {
+  const wasOpen = !el.classList.contains('hidden');
+  el.classList.add('hidden');
+  if (el === drawerEl) {
+    $('#btn-workbench').setAttribute('aria-expanded', 'false');
+    if (wasOpen) setTimeout(() => { updateFitScale(); relayout(); }, 0);
+    return;
+  }
+  const back = modalReturn.get(el);
+  modalReturn.delete(el);
+  if (back && document.contains(back) && typeof back.focus === 'function') back.focus();
+}
+
+// Tab stays inside whichever dialog is open.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab') return;
+  const open = $$('.modal-wrap, .palette-wrap').find((m) => !m.classList.contains('hidden'));
+  if (!open) return;
+  const nodes = visibleFocusables(open);
+  if (!nodes.length) return;
+  const first = nodes[0], last = nodes[nodes.length - 1];
+  if (e.shiftKey && (document.activeElement === first || !open.contains(document.activeElement))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (document.activeElement === last || !open.contains(document.activeElement))) {
+    e.preventDefault();
+    first.focus();
+  }
+}, true);
 
 // A click on the dimmed backdrop closes a dialog — except the two that are
 // waiting for an answer, which have to be answered.
@@ -2908,7 +3304,7 @@ function drawStampToPdf(page, font, vp1, rot, o) {
 async function exportAnnotated(opts) {
   if (state.locked) {
     throw new Error(
-      'this document is still encrypted, so it cannot be rewritten. Use Workbench → Security ' +
+      'this document is still encrypted, so it cannot be rewritten. Use Tools → Protect ' +
       '→ Remove a password first.'
     );
   }
@@ -3126,9 +3522,10 @@ function describeRaster(info) {
 
 btnDownload.addEventListener('click', async () => {
   if (!state.doc || btnDownload.disabled) return;
-  const orig = btnDownload.textContent;
+  const orig = buttonLabel(btnDownload);
   btnDownload.disabled = true;
-  btnDownload.textContent = 'Preparing…';
+  buttonLabel(btnDownload, 'Preparing…');
+  setBusy(true);
   try {
     const edited = state.objects.length > 0;
     const bytes = await exportAnnotated({
@@ -3139,13 +3536,14 @@ btnDownload.addEventListener('click', async () => {
       })
     });
     downloadBytes(bytes, suffixName(state.name, edited ? '-edited' : ''));
-    state.dirty = false;
+    setDirty(false);
   } catch (err) {
     if (!(err && err.name === 'ExportCancelled')) {
       showBanner('Export failed: ' + ((err && err.message) || err));
     }
   }
-  btnDownload.textContent = orig;
+  setBusy(false);
+  buttonLabel(btnDownload, orig);
   btnDownload.disabled = state.locked;
 });
 
@@ -3348,6 +3746,56 @@ for (const b of toolBtns) {
   });
 }
 
+// The rail is a single stop for the Tab key; the arrow keys move along it.
+const railButtons = $$('.rail .tool, .rail .side-tab');
+railButtons.forEach((b, i) => {
+  b.tabIndex = i === 0 ? 0 : -1;
+  b.addEventListener('keydown', (e) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const n = railButtons.length;
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1
+      : (i + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+    for (const other of railButtons) other.tabIndex = -1;
+    railButtons[next].tabIndex = 0;
+    railButtons[next].focus();
+  });
+});
+
+/*
+ * The highlighter's colours are shown as chips. The control the rest of the
+ * code reads is still the select they stand in for: a chip sets it and fires
+ * its change, so nothing else has to know the chips are there.
+ */
+function buildChips(select, holder) {
+  holder.textContent = '';
+  for (const option of Array.from(select.options)) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
+    chip.style.background = option.value;
+    chip.setAttribute('role', 'radio');
+    chip.setAttribute('aria-label', option.textContent);
+    chip.title = option.textContent;
+    chip.addEventListener('click', () => {
+      select.value = option.value;
+      select.dispatchEvent(new Event('change'));
+    });
+    holder.appendChild(chip);
+  }
+  select.addEventListener('change', () => paintChips(select, holder));
+  paintChips(select, holder);
+}
+
+function paintChips(select, holder) {
+  Array.from(holder.children).forEach((chip, i) => {
+    chip.setAttribute('aria-checked', String(select.options[i] && select.options[i].value === select.value));
+  });
+}
+
+buildChips(hlColorInput, $('#hl-chips'));
+
 /*
  * Each control sets what the next mark of its kind will look like, and — when
  * a mark of that kind is selected — changes that mark too. `change` runs on
@@ -3434,9 +3882,13 @@ shapeFilledInput.addEventListener('change', () => {
 btnUndoStroke.addEventListener('click', undo);
 if (btnUndo) btnUndo.addEventListener('click', undo);
 if (btnRedo) btnRedo.addEventListener('click', redo);
-btnDeleteObj.addEventListener('click', () => {
-  if (state.selection) deleteObject(state.selection.id);
-});
+/** Delete what is selected, and leave a way straight back. */
+function deleteSelection() {
+  if (!state.selection) return;
+  deleteObject(state.selection.id);
+  showBanner('Deleted.', 'info', { action: { label: 'Undo', run: undo }, life: 4500 });
+}
+btnDeleteObj.addEventListener('click', deleteSelection);
 btnDuplicateObj.addEventListener('click', () => duplicateObject(state.selection));
 
 btnOpenTop.addEventListener('click', () => pdfInput.click());
@@ -3464,7 +3916,9 @@ function ask(opts) {
   const o = Object.assign({ title: '', text: '', ok: 'OK', cancel: 'Cancel', danger: false, input: null }, opts);
   if (askOpen) askOpen(o.input ? null : false);
   return new Promise((resolve) => {
-    const field = $('#ask-input');
+    // A note gets a box it can run to several lines in; a name gets one line.
+    const single = !!(o.input && o.input.single);
+    const field = single ? $('#ask-line') : $('#ask-input');
     const okBtn = $('#ask-ok');
     const cancelBtn = $('#ask-cancel');
     $('#ask-title').textContent = o.title;
@@ -3473,10 +3927,14 @@ function ask(opts) {
     okBtn.textContent = o.ok;
     cancelBtn.textContent = o.cancel;
     okBtn.classList.toggle('danger-btn', !!o.danger);
-    field.classList.toggle('hidden', !o.input);
+    $('#ask-input').classList.toggle('hidden', !o.input || single);
+    $('#ask-line').classList.toggle('hidden', !single);
     if (o.input) field.value = o.input.value || '';
     openModal(askModal);
-    setTimeout(() => (o.input ? field : okBtn).focus(), 30);
+    setTimeout(() => {
+      (o.input ? field : okBtn).focus();
+      if (single) field.select();
+    }, 30);
 
     const finish = (value) => {
       askOpen = null;
@@ -3492,13 +3950,14 @@ function ask(opts) {
     // note does not pick a tool, and Escape answers the question.
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel(); return; }
-      if (e.key === 'Enter' && (!o.input || e.ctrlKey || e.metaKey)) {
+      if (e.key === 'Enter' && (!o.input || single || e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         e.stopPropagation();
         onOk();
         return;
       }
-      e.stopPropagation();
+      // Tab is left to the handler that keeps it inside the dialog.
+      if (e.key !== 'Tab') e.stopPropagation();
     };
     askOpen = finish;
     okBtn.addEventListener('click', onOk);
@@ -3512,7 +3971,9 @@ function confirmDialog(opts) {
 }
 
 function textDialog(opts) {
-  return ask(Object.assign({}, opts, { input: { value: (opts && opts.value) || '' } }));
+  return ask(Object.assign({}, opts, {
+    input: { value: (opts && opts.value) || '', single: !!(opts && opts.single) }
+  }));
 }
 
 /* ============================== leaving ============================== */
@@ -3545,15 +4006,15 @@ window.addEventListener('dragover', (e) => {
   if (!draggingFiles(e)) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
-  viewerEl.classList.add('drag');
+  document.body.classList.add('dragging');
 });
 window.addEventListener('dragleave', (e) => {
-  if (!e.relatedTarget) viewerEl.classList.remove('drag');
+  if (!e.relatedTarget) document.body.classList.remove('dragging');
 });
 window.addEventListener('drop', (e) => {
+  document.body.classList.remove('dragging');
   if (!draggingFiles(e)) return;
   e.preventDefault();
-  viewerEl.classList.remove('drag');
   const files = Array.from(e.dataTransfer.files || []);
   if (files.length) handleDroppedFiles(files);
 });
@@ -3614,6 +4075,7 @@ const SHORTCUTS = [
   ['F4', 'Show or hide the side panel'], ['F5', 'Presentation mode'],
   ['Ctrl + +', 'Zoom in'], ['Ctrl + −', 'Zoom out'], ['Ctrl + 0', 'Fit width'],
   ['Ctrl + wheel', 'Zoom about the pointer'],
+  ['Ctrl + K', 'Search every tool and action'],
   ['Page Up / Down', 'Previous / next page'], ['?', 'This list']
 ];
 
@@ -3640,12 +4102,18 @@ document.addEventListener('keydown', (e) => {
                        t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
   const openModalEl = $$('.modal-wrap').find((m) => !m.classList.contains('hidden'));
 
+  // Escape backs out of one thing at a time, innermost first.
   if (e.key === 'Escape') {
+    if (openMenu) { closeMenu(); return; }
     if (state.present) { setPresent(false); return; }
     if (openModalEl && openModalEl !== pwModal && openModalEl !== askModal) { closeModal(openModalEl); return; }
     if (typing) { t.blur(); return; }
-    clearSelection();
-    setTool('select');
+    if (state.selection || state.tool !== 'select') {
+      clearSelection();
+      setTool('select');
+      return;
+    }
+    if (!drawerEl.classList.contains('hidden')) closeModal(drawerEl);
     return;
   }
 
@@ -3654,7 +4122,6 @@ document.addEventListener('keydown', (e) => {
   if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); btnDownload.click(); return; }
   if (mod && e.key.toLowerCase() === 'f') {
     e.preventDefault();
-    sidebarEl.classList.remove('collapsed');
     showSidePanel('panel-search');
     $('#search-input').focus();
     return;
@@ -3672,13 +4139,13 @@ document.addEventListener('keydown', (e) => {
   }
   if (openModalEl) return;
 
-  if (e.key === 'F4') { e.preventDefault(); $('#btn-sidebar').click(); return; }
+  if (e.key === 'F4') { e.preventDefault(); setSidebar(sidebarEl.classList.contains('collapsed')); return; }
   if (e.key === 'F5') { e.preventDefault(); setPresent(!state.present); return; }
   if (e.key === '?') { e.preventDefault(); openModal(keysModal); return; }
 
   if ((e.key === 'Delete' || e.key === 'Backspace') && state.selection) {
     e.preventDefault();
-    deleteObject(state.selection.id);
+    deleteSelection();
     return;
   }
   if (mod && e.key.toLowerCase() === 'z') {
@@ -3727,12 +4194,24 @@ document.addEventListener('keydown', (e) => {
 /* ============================== side panel switching ============================== */
 
 function showSidePanel(id) {
-  for (const tab of $$('.side-tab')) tab.classList.toggle('active', tab.dataset.panel === id);
+  for (const tab of $$('.side-tab')) {
+    const on = tab.dataset.panel === id;
+    tab.classList.toggle('active', on);
+    if (on) $('#side-title').textContent = tab.getAttribute('aria-label') || '';
+  }
   for (const panel of $$('.side-panel')) panel.classList.toggle('hidden', panel.id !== id);
+  if (sidebarEl.classList.contains('collapsed')) setSidebar(true);
+  else for (const tab of $$('.side-tab')) tab.setAttribute('aria-selected', String(tab.classList.contains('active')));
   document.dispatchEvent(new CustomEvent('ps:panel-shown', { detail: { id } }));
 }
+// A panel's button opens it; pressed again while it is showing, it puts the
+// panel away and gives the room back to the document.
 for (const tab of $$('.side-tab')) {
-  tab.addEventListener('click', () => showSidePanel(tab.dataset.panel));
+  tab.addEventListener('click', () => {
+    const showing = tab.classList.contains('active') && !sidebarEl.classList.contains('collapsed');
+    if (showing) setSidebar(false);
+    else showSidePanel(tab.dataset.panel);
+  });
 }
 
 /* ============================== public surface ============================== */
@@ -3764,6 +4243,18 @@ window.PS = {
   layoutAll,
   renderPage,
   askPassword,
+  icon,
+  setZoom,
+  fitWidth,
+  fitPage,
+  relayout,
+  updateFitScale,
+  setSidebar,
+  closeMenu,
+  setBusy,
+  buttonLabel,
+  setDirty,
+  setPresent,
   confirmDialog,
   textDialog,
   undo,

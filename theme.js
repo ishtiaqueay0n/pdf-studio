@@ -1,11 +1,11 @@
 'use strict';
 /*
- * Interface theme.
+ * Interface theme: light, dark, or whatever the system is set to.
  *
- * Light by default. The choice is remembered in localStorage, which every
- * extension page shares within the profile and which needs no extra
- * permission — deliberately not chrome.storage, so the manifest keeps its two
- * permissions.
+ * It follows the system until a choice is made. The choice is remembered in
+ * localStorage, which every extension page shares within the profile and
+ * which needs no extra permission — deliberately not chrome.storage, so the
+ * manifest keeps its two permissions.
  *
  * This changes the interface only. The rendered page, the annotation colours,
  * whiteout, redaction and everything that ends up in the saved file are left
@@ -19,61 +19,98 @@
 const KEY = 'pdf-studio-theme';
 const DARK = 'dark';
 const LIGHT = 'light';
+const SYSTEM = 'system';
+const MODES = [LIGHT, DARK, SYSTEM];
+const LABELS = { light: 'Light', dark: 'Dark', system: 'Match system' };
 
 const buttons = [];
+const listeners = [];
+const media = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
 
 function stored() {
   try {
     const v = localStorage.getItem(KEY);
-    return v === DARK || v === LIGHT ? v : null;
+    return MODES.includes(v) ? v : null;
   } catch (err) {
     return null; // storage blocked — the default is fine
   }
 }
 
+let chosen = stored() || SYSTEM;
+
+/** The mode that was asked for: light, dark or system. */
+function mode() {
+  return chosen;
+}
+
+/** The theme actually showing: light or dark. */
 function current() {
-  return document.documentElement.getAttribute('data-theme') === DARK ? DARK : LIGHT;
+  if (chosen === SYSTEM) return media && media.matches ? DARK : LIGHT;
+  return chosen;
 }
 
-function apply(theme) {
-  const t = theme === DARK ? DARK : LIGHT;
-  if (t === DARK) document.documentElement.setAttribute('data-theme', DARK);
-  else document.documentElement.removeAttribute('data-theme');
-  return t;
+function paint() {
+  const el = document.documentElement;
+  if (current() === DARK) el.setAttribute('data-theme', DARK);
+  else el.removeAttribute('data-theme');
+  for (const b of buttons) label(b);
+  for (const fn of listeners) fn(chosen, current());
 }
 
-function label(button, theme) {
-  const dark = theme === DARK;
-  button.setAttribute('aria-pressed', dark ? 'true' : 'false');
-  button.title = dark ? 'Switch to the light interface' : 'Switch to the dark interface';
-  const sun = button.querySelector('[data-theme-icon="light"]');
-  const moon = button.querySelector('[data-theme-icon="dark"]');
-  if (sun) sun.style.display = dark ? '' : 'none';
-  if (moon) moon.style.display = dark ? 'none' : '';
+/** Show a mode without remembering it. */
+function apply(next) {
+  chosen = MODES.includes(next) ? next : SYSTEM;
+  paint();
+  return current();
 }
 
-function set(theme) {
-  const t = apply(theme);
-  try { localStorage.setItem(KEY, t); } catch (err) { /* not worth failing over */ }
-  for (const b of buttons) label(b, t);
-  return t;
+/** Show a mode and remember it. */
+function set(next) {
+  apply(next);
+  try { localStorage.setItem(KEY, chosen); } catch (err) { /* not worth failing over */ }
+  return current();
 }
 
+/** Step to the next mode: light, dark, system, and round again. */
 function toggle() {
-  return set(current() === DARK ? LIGHT : DARK);
+  return set(MODES[(MODES.indexOf(chosen) + 1) % MODES.length]);
 }
 
-/** Wire a button to the toggle and keep its icon and label in step. */
+// A cycling button shows the icon of the mode it is in and says what a click
+// will change it to.
+function label(button) {
+  const next = MODES[(MODES.indexOf(chosen) + 1) % MODES.length];
+  const text = 'Theme: ' + LABELS[chosen] + ' — switch to ' + LABELS[next].toLowerCase();
+  button.title = text;
+  button.setAttribute('aria-label', text);
+  for (const icon of button.querySelectorAll('[data-theme-icon]')) {
+    icon.classList.toggle('hidden', icon.getAttribute('data-theme-icon') !== chosen);
+  }
+}
+
+/** Wire a button to step through the modes and keep its icon in step. */
 function register(button) {
   if (!button) return;
   buttons.push(button);
-  label(button, current());
+  label(button);
   button.addEventListener('click', () => toggle());
 }
 
-// Applied at load, from <head>, so the first paint is already the right theme.
-apply(stored() || LIGHT);
+/** Be told when the mode changes: fn(mode, theme). */
+function onChange(fn) {
+  listeners.push(fn);
+}
 
-root.PSTheme = { apply, set, toggle, current, register, KEY };
+// While following the system, follow it live.
+if (media) {
+  const follow = () => { if (chosen === SYSTEM) paint(); };
+  if (media.addEventListener) media.addEventListener('change', follow);
+  else if (media.addListener) media.addListener(follow);
+}
+
+// Applied at load, from <head>, so the first paint is already the right theme.
+paint();
+
+root.PSTheme = { apply, set, toggle, current, mode, register, onChange, KEY, MODES, LABELS };
 
 })(typeof window !== 'undefined' ? window : globalThis);

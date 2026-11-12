@@ -1,33 +1,48 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <title>PDF Studio</title>
+  <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="popup.css">
   <script src="theme.js"></script>
 </head>
 <body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-text-edit" viewBox="0 0 24 24"><path d="M4 6h13M4 11h9M4 16h5M13 20.5l.6-2.8 5.9-5.9 2.2 2.2-5.9 5.9z"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h13M14 5l3 3-3 3M20 16H7M10 13l-3 3 3 3"/></symbol>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h3.6l2 2H18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M7 3.5h7l4.5 4.5V19a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5zM14 3.5V8h4.5M12 11.5v6M9 14.5h6"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 4l8.5 4.5L12 13 3.5 8.5zM3.5 13L12 17.5l8.5-4.5"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.8v2.2M12 19v2.2M2.8 12H5M19 12h2.2M5.5 5.5L7 7M17 17l1.5 1.5M18.5 5.5L17 7M7 17l-1.5 1.5"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8.2 8.2 0 1 0 20 14.5z"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="12" rx="2"/><path d="M9 20.5h6M12 16.5v4"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+  </svg>
+
   <div class="brand">
     <img src="icons/icon48.png" alt="" width="22" height="22">
     <span>PDF Studio</span>
-    <button class="icon-btn" id="btn-theme" title="Switch to the dark interface" aria-pressed="false">
-      <svg data-theme-icon="dark" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8.2 8.2 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-      <svg data-theme-icon="light" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style="display:none"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    <button class="icon-btn" id="btn-theme" aria-label="Theme">
+      <svg class="icon hidden" data-theme-icon="light"><use href="#i-sun"/></svg>
+      <svg class="icon hidden" data-theme-icon="dark"><use href="#i-moon"/></svg>
+      <svg class="icon" data-theme-icon="system"><use href="#i-monitor"/></svg>
     </button>
   </div>
 
-  <div id="status" class="status">Checking this tab…</div>
+  <div id="status" class="status" role="status">Checking this tab…</div>
 
-  <button id="btn-edit-current" class="btn primary hidden">Edit this PDF</button>
-  <button id="btn-convert-current" class="btn hidden">Convert this PDF…</button>
+  <button id="btn-edit-current" class="btn primary hidden"><svg class="icon"><use href="#i-text-edit"/></svg><span>Edit this PDF</span></button>
+  <button id="btn-convert-current" class="btn hidden"><svg class="icon"><use href="#i-swap"/></svg><span>Convert this PDF…</span></button>
   <button id="btn-force" class="btn ghost hidden">Not detected? Try this page anyway</button>
 
   <div class="sep"></div>
 
-  <button id="btn-open" class="btn">Open the editor</button>
-  <button id="btn-create" class="btn">Create a PDF from other files</button>
-  <button id="btn-merge" class="btn">Merge or split PDFs</button>
+  <button id="btn-open" class="btn"><svg class="icon"><use href="#i-open"/></svg><span>Open the editor</span></button>
+  <button id="btn-create" class="btn"><svg class="icon"><use href="#i-file-plus"/></svg><span>Make a PDF from other files</span></button>
+  <button id="btn-merge" class="btn"><svg class="icon"><use href="#i-layers"/></svg><span>Merge or split PDFs</span></button>
 
-  <p class="foot">All processing happens on your machine. No files leave the browser.</p>
+  <p class="foot"><svg class="icon sm"><use href="#i-lock"/></svg>Everything happens on your machine. No file leaves the browser.</p>
 
   <script src="popup.js"></script>
 </body>
