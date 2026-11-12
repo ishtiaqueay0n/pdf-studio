@@ -3578,15 +3578,41 @@ async function pageSearchData(index) {
   return entries;
 }
 
+/*
+ * Where each character of a text item starts and ends, as fractions of the
+ * item's width. The PDF gives only the width of the whole run, so the
+ * proportions are measured in a browser font of the same kind — serif, sans or
+ * mono, bold, italic — and scaled to that width. Glyph shapes differ between
+ * faces but their relative widths are close, which is far nearer than treating
+ * every character as equally wide ("i" against "m" is a factor of three).
+ */
+const glyphCtx = document.createElement('canvas').getContext('2d');
+const glyphStops = new WeakMap();
+
+function charStops(item) {
+  let stops = glyphStops.get(item);
+  if (stops) return stops;
+  const family = item.mono ? 'monospace' : item.serif ? 'Georgia, serif' : 'Arial, sans-serif';
+  glyphCtx.font = (item.italic ? 'italic ' : '') + (item.bold ? 'bold ' : '') + '100px ' + family;
+  const total = glyphCtx.measureText(item.str).width;
+  stops = [0];
+  for (let c = 1; c <= item.str.length; c++) {
+    stops.push(total > 0 ? glyphCtx.measureText(item.str.slice(0, c)).width / total : c / item.str.length);
+  }
+  glyphStops.set(item, stops);
+  return stops;
+}
+
 function rectForMatch(entry, start, end) {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (let i = start; i < end; i++) {
     const m = entry.map[i];
     if (!m) continue;
-    const per = m.item.w / Math.max(1, m.len);
-    const x0 = m.item.x + per * m.offset;
+    const stops = charStops(m.item);
+    const x0 = m.item.x + m.item.w * stops[m.offset];
+    const x1 = m.item.x + m.item.w * stops[m.offset + 1];
     minX = Math.min(minX, x0);
-    maxX = Math.max(maxX, x0 + per);
+    maxX = Math.max(maxX, x1);
     minY = Math.min(minY, m.item.y);
     maxY = Math.max(maxY, m.item.y + m.item.h);
   }

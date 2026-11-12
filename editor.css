@@ -358,8 +358,8 @@ body[data-dirty="true"] .dirty-dot { display: block; }
 .actions .btn { margin-left: var(--s-1); }
 
 /* A thin line under the bar while something is loading or being saved. */
-.busy { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; pointer-events: none; }
-body.busy .busy::after {
+.busy-line { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; pointer-events: none; }
+body.busy .busy-line::after {
   content: "";
   position: absolute;
   top: 0;
