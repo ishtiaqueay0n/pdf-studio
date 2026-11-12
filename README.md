@@ -4,11 +4,15 @@ A complete PDF workshop that runs entirely inside your browser. Read, edit,
 annotate, sign, organise, protect and convert PDFs — and build new ones from
 images, Word files, spreadsheets and plain text.
 
-**Nothing is uploaded.** There is no server, no account and no network call:
-pdf.js renders, pdf-lib writes, and the Office formats are produced by bundled
-libraries. Every byte stays on your machine.
+**Nothing is uploaded.** There is no server, no account and no analytics. The
+only network request is the one you ask for — fetching a PDF from the address
+you opened it at. pdf.js renders, pdf-lib writes, and the Office formats are
+produced by bundled libraries. Every byte stays on your machine. See the
+[privacy policy](PRIVACY.md).
 
-## Install (Load unpacked)
+## Install
+
+Install from the Chrome Web Store, or load it unpacked for development:
 
 1. Unzip this folder somewhere permanent (Chrome loads it from disk).
 2. Open `chrome://extensions`
@@ -359,7 +363,7 @@ file it opens is hostile.
   that concession at all, delete `libs/tesseract*`, drop `'wasm-unsafe-eval'`
   from the manifest and remove the two OCR `<script>` tags — everything else
   keeps working, and scanned pages go back to converting as pictures.
-- **Two permissions only:** `activeTab` and `contextMenus`. Host access covers
+- **One permission only:** `contextMenus`. Host access covers
   `http`, `https` and `file` because the whole point of "Edit this PDF" is
   fetching the document open in front of you — with your cookies, so PDFs behind
   a login work. Only those schemes are accepted.
@@ -385,7 +389,12 @@ compatibility.
 
 ## Stack
 
-Manifest V3, no build step, no remote code, no network access.
+Manifest V3, no build step, no remote code. The only network access is fetching
+a PDF the user opens from a web address.
+
+To build the Chrome Web Store package, commit and run
+`git archive --format=zip -o dist/pdf-studio-<version>.zip HEAD` — see
+[STORE.md](STORE.md) for the listing text and permission justifications.
 
 | File | Role |
 | --- | --- |

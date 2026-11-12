@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "PDF Studio",
-  "version": "2.1.0",
-  "description": "A complete PDF workshop: edit, annotate, sign, organise, protect and convert PDFs to Word, Excel, PowerPoint and more — entirely on your own machine.",
-  "permissions": ["activeTab", "contextMenus"],
+  "version": "2.2.0",
+  "description": "Edit, annotate, sign, organise, protect and convert PDFs to Word, Excel and PowerPoint — entirely offline, on your own machine.",
+  "minimum_chrome_version": "91",
+  "permissions": ["contextMenus"],
   "host_permissions": ["http://*/*", "https://*/*", "file:///*"],
   "background": { "service_worker": "background.js" },
   "action": {
